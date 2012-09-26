@@ -471,6 +471,7 @@ namespace System.Web.Configuration {
 			}
 
 			string cachePath = null;
+			pathPresent = false;
 			if (pathPresent) {
 				string relPath;
 				
