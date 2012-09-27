@@ -849,14 +849,33 @@ namespace System
 
 		private static DateTime TransitionPoint (TransitionTime transition, int year)
 		{
+			DateTime dateTime;
 			if (transition.IsFixedDateRule)
-				return new DateTime (year, transition.Month, transition.Day) + transition.TimeOfDay.TimeOfDay;
-
-			DayOfWeek first = (new DateTime (year, transition.Month, 1)).DayOfWeek;
-			int day = 1 + (transition.Week - 1) * 7 + (transition.DayOfWeek - first) % 7;
-			if (day >  DateTime.DaysInMonth (year, transition.Month))
-				day -= 7;
-			return new DateTime (year, transition.Month, day) + transition.TimeOfDay.TimeOfDay;
+			{
+				int daysInMonth = DateTime.DaysInMonth(year, transition.Month);
+				dateTime = new DateTime (year, transition.Month, daysInMonth < transition.Day ? daysInMonth : transition.Day) + transition.TimeOfDay.TimeOfDay;
+			}
+			else if (transition.Week <= 4)
+			{
+				dateTime = new DateTime(year, transition.Month, 1) + transition.TimeOfDay.TimeOfDay;
+				int dayOffset = transition.DayOfWeek - dateTime.DayOfWeek;
+				if (dayOffset < 0)
+					dayOffset += 7;
+				int days = dayOffset + 7 * (transition.Week - 1);
+				if (days > 0)
+					dateTime = dateTime.AddDays(days);
+			}
+			else
+			{
+				int daysInMonth = DateTime.DaysInMonth(year, transition.Month);
+				dateTime = new DateTime(year, transition.Month, daysInMonth) + transition.TimeOfDay.TimeOfDay;
+				int dayOffset = dateTime.DayOfWeek - transition.DayOfWeek;
+				if (dayOffset < 0)
+					dayOffset += 7;
+				if (dayOffset > 0)
+					dateTime = dateTime.AddDays(-dayOffset);
+			}
+			return dateTime;
 		}
 
 		static List<AdjustmentRule> ValidateRules (List<AdjustmentRule> adjustmentRules)
