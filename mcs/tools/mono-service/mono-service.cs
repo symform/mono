@@ -20,24 +20,39 @@ using System.Runtime.InteropServices;
 
 class MonoServiceRunner : MarshalByRefObject
 {
-	string assembly, name, logname;
+	static string output;
+
+	string assembly, name, logname, minThreads, maxThreads;
+	bool exclude_sigusr;
 	string[] args;
 	
 	static void info (string prefix, string format, params object [] args)
 	{
-		Syscall.syslog (SyslogLevel.LOG_INFO, String.Format ("{0}: {1}", prefix, String.Format (format, args)));
+		var msg = String.Format ("{0}: {1}", prefix, String.Format (format, args));
+		switch (output){
+		case null: Syscall.syslog (SyslogLevel.LOG_NOTICE, msg); break;
+		case "stdout": Console.WriteLine (msg); break;
+		default: Console.Error.WriteLine (msg); break;
+		}
 	}
 	
 	static void error (string prefix, string format, params object [] args)
 	{
-		Syscall.syslog (SyslogLevel.LOG_ERR, String.Format ("{0}: {1}", prefix, String.Format (format, args)));
+		var msg = String.Format ("{0}: {1}", prefix, String.Format (format, args));
+		switch (output){
+		case null: Syscall.syslog (SyslogLevel.LOG_ERR, msg); break;
+		case "stdout": Console.WriteLine (msg); break;
+		default: Console.Error.WriteLine (msg); break;
+		}
 	}
 	
 	static void Usage ()
 	{
 		Console.Error.WriteLine (
 					 "Usage is:\n" +
-					 "mono-service [-d:DIRECTORY] [-l:LOCKFILE] [-n:NAME] [-m:LOGNAME] service.exe\n");
+					 "mono-service [-d:DIRECTORY] [-l:LOCKFILE] [-n:NAME] [-m:LOGNAME]\n" +
+					 "[-i:MIN_WORKER_THREADS[:MIN_IO_THREADS]] [-a:MAX_WORKER_THREADS[:MAX_IO_THREADS]]\n" +
+					 "[-o:OUTPUT] [-x:BOOL] service.exe\n");
 		Environment.Exit (1);
 	}
 
@@ -57,6 +72,10 @@ class MonoServiceRunner : MarshalByRefObject
 		string lockfile = null;
 		string name = null;
 		string logname = null;
+		string minThreads = null;
+		string maxThreads = null;
+		string output = null;
+		bool exclude_sigusr = false;
 		var assebmlyArgs = new List<string>();
 
 		foreach (string s in args){
@@ -68,6 +87,10 @@ class MonoServiceRunner : MarshalByRefObject
 				case 'l': lockfile = arg; break;
 				case 'n': name = arg; break;
 				case 'm': logname = arg; break;
+				case 'i': minThreads = arg; break;
+				case 'a': maxThreads = arg; break;
+				case 'o': output = arg; break;
+				case 'x': exclude_sigusr = (arg == "true"); break;
 				default: Usage (); break;
 				}
 			} else {
@@ -138,7 +161,8 @@ class MonoServiceRunner : MarshalByRefObject
 				true,
 				BindingFlags.Default,
 				null,
-				new object [] {assembly, name, logname, assebmlyArgs.ToArray()},
+				new object [] {assembly, name, logname, minThreads, maxThreads,
+					       output, exclude_sigusr, assebmlyArgs.ToArray()},
 				null, null, null) as MonoServiceRunner;
 				
 			if (rnr == null) {
@@ -154,11 +178,18 @@ class MonoServiceRunner : MarshalByRefObject
 		}
 	}
 	
-	public MonoServiceRunner (string assembly, string name, string logname, string[] args)
+	public MonoServiceRunner (string assembly, string name, string logname,
+				  string minThreads, string maxThreads,
+				  string output_name, bool exclude_sigusr, string[] args)
 	{
+		output = output_name;
+
 		this.assembly = assembly;
 		this.name = name;
 		this.logname = logname;
+		this.minThreads = minThreads;
+		this.maxThreads = maxThreads;
+		this.exclude_sigusr = exclude_sigusr;
 		this.args = args;
 	}
 	
@@ -207,8 +238,13 @@ class MonoServiceRunner : MarshalByRefObject
 			return AppDomain.CurrentDomain.ExecuteAssembly (assembly, AppDomain.CurrentDomain.Evidence, args);
 			
 		} catch ( Exception ex ) {
+			var splitStrings = new string[] {Environment.NewLine};
 			for (Exception e = ex; e != null; e = e.InnerException) {
 				error (logname, e.Message);
+				foreach (var line in e.StackTrace.Split(splitStrings, StringSplitOptions.RemoveEmptyEntries))
+				{
+					error (logname, line);
+				}
 			}
 			
 			return 1;
@@ -220,10 +256,41 @@ class MonoServiceRunner : MarshalByRefObject
 	{
 		try {
 			ServiceBase service;
-	
+
 			if (services == null || services.Length == 0){
 				error (logname, "No services were registered by this service");
 				return;
+			}
+
+			// Optionally adjust the service's thread limits.
+			if (this.maxThreads != null){
+				int[] maxThreads = { 0, 0 };
+				string[] limits = this.maxThreads.Split (':');
+				if (limits.Length > 0)
+					maxThreads[0] = Convert.ToInt32 (limits[0]);
+				if (limits.Length > 1)
+					maxThreads[1] = Convert.ToInt32 (limits[1]);
+				else
+					maxThreads[1] = maxThreads[0];
+
+				if (!ThreadPool.SetMaxThreads(maxThreads[0], maxThreads[1])) {
+					error (logname, "The value given for maxThreads is not valid: {0}:{1}", maxThreads[0], maxThreads[1]);
+				}
+			}
+
+			if (this.minThreads != null){
+				int[] minThreads = { 0, 0 };
+				string[] limits = this.minThreads.Split (':');
+				if (limits.Length > 0)
+					minThreads[0] = Convert.ToInt32 (limits[0]);
+				if (limits.Length > 1)
+					minThreads[1] = Convert.ToInt32 (limits[1]);
+				else
+					minThreads[1] = minThreads[0];
+
+				if (!ThreadPool.SetMinThreads(minThreads[0], minThreads[1])) {
+					error (logname, "The value given for minThreads is not valid: {0}:{1}", minThreads[0], minThreads[1]);
+				}
 			}
 			
 			// Start up the service.
@@ -245,15 +312,26 @@ class MonoServiceRunner : MarshalByRefObject
 	
 			UnixSignal intr = new UnixSignal (Signum.SIGINT);
 			UnixSignal term = new UnixSignal (Signum.SIGTERM);
-			UnixSignal usr1 = new UnixSignal (Signum.SIGUSR1);
-			UnixSignal usr2 = new UnixSignal (Signum.SIGUSR2);
+			UnixSignal usr1 = null;
+			UnixSignal usr2 = null;
 
-			UnixSignal[] sigs = new UnixSignal[]{
-				intr,
-				term,
-				usr1,
-				usr2
-			};
+			UnixSignal[] sigs = null;
+			if (exclude_sigusr){
+				sigs = new UnixSignal[]{
+					intr,
+					term
+				};
+				info (logname, "Ignoring USR signals");
+			} else {
+				usr1 = new UnixSignal (Signum.SIGUSR1);
+				usr2 = new UnixSignal (Signum.SIGUSR2);
+				sigs = new UnixSignal[]{
+					intr,
+					term,
+					usr1,
+					usr2
+				};
+			}
 
 			for (bool running = true; running; ){
 				int idx = UnixSignal.WaitAny (sigs);
@@ -266,12 +344,12 @@ class MonoServiceRunner : MarshalByRefObject
 					call (service, "OnStop", null);
 					running = false;
 				}
-				else if (usr1.IsSet && service.CanPauseAndContinue) {
+				else if (usr1 != null && usr1.IsSet && service.CanPauseAndContinue) {
 					usr1.Reset ();
 					info (logname, "Pausing service {0}", service.ServiceName);
 					call (service, "OnPause", null);
 				}
-				else if (usr2.IsSet && service.CanPauseAndContinue) {
+				else if (usr2 != null && usr2.IsSet && service.CanPauseAndContinue) {
 					usr2.Reset ();
 					info (logname, "Continuing service {0}", service.ServiceName);
 					call (service, "OnContinue", null);
