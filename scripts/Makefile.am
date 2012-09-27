@@ -56,6 +56,7 @@ deprecated = 					\
 scripts_2_0 = \
 	al2$(SCRIPT_SUFFIX)			\
 	gacutil2$(SCRIPT_SUFFIX)		\
+	certmgr$(SCRIPT_SUFFIX)			\
 	monop2$(SCRIPT_SUFFIX) 			\
 	resgen2$(SCRIPT_SUFFIX)			\
 	wsdl2$(SCRIPT_SUFFIX)

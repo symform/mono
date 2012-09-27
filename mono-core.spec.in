@@ -220,6 +220,7 @@ rm -rf %buildroot
 %_prefix/lib/mono/2.0/System.Json.dll
 %_prefix/lib/mono/2.0/al.exe*
 %_prefix/lib/mono/2.0/cscompmgd.dll
+%_prefix/lib/mono/2.0/certmgr.exe*
 %_prefix/lib/mono/2.0/gacutil.exe*
 %_prefix/lib/mono/2.0/mscorlib.dll*
 %_prefix/lib/mono/4.0/Commons.Xml.Relaxng.dll
