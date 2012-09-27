@@ -1143,6 +1143,9 @@ mini_usage (void)
 		"                           Currently the only supported option is 'disable'.\n"
 		"    --llvm, --nollvm       Controls whenever the runtime uses LLVM to compile code.\n"
 	        "    --gc=[sgen,boehm]      Select SGen or Boehm GC (runs mono or mono-sgen)\n"
+	        "    --set-process-title=NAME\n"
+	        "                           Set the process title to NAME via argv clobbering\n"
+	        "                           NOTE: This option must be in the program-options\n"
 	  );
 }
 

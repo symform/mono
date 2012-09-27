@@ -4,6 +4,39 @@
 #include "buildver.h"
 #endif
 
+/* Set the process title via argv clobbering
+	Note: this may need to be followed by a more platform specific method for completeness
+		e.g. linux prctl
+ */
+static int set_process_title (int argc, void **argv, void *title, size_t title_len)
+{
+	void *last = argv[argc-1];
+	size_t len = last - argv[0] + strlen(last);
+	memset(*argv, 0, len);
+	// BSD will count the number of arguments (argc) and expect to find that many
+	// zero bytes before expecting the environment section to begin...without this, the
+	// environment is shown in a process listing.
+	len -= argc;
+	if (len > title_len) len = title_len;
+	memcpy(*argv, title, len);
+	return len;
+}
+
+/* Determine if the --set-process-title=TITLE argument has been passed and if so set the process title to it */
+static void handle_set_process_title (int argc, char *argv[])
+{
+	int i;
+	for (i = 0; i < argc; i++){
+		if (strncmp (argv[i], "--set-process-title=", 20) == 0) {
+			size_t length = strlen (argv[i]) - 20;
+			char *title = (char*)malloc(sizeof(char*)*length);
+			strcpy (title, argv[i]+20);
+			int val = set_process_title (argc, (void **)argv, title, length);
+			return;
+		}
+	}
+}
+
 /*
  * If the MONO_ENV_OPTIONS environment variable is set, it uses this as a
  * source of command line arguments that are passed to Mono before the
@@ -12,6 +45,9 @@
 static int
 mono_main_with_options (int argc, char *argv [])
 {
+	int old_argc = argc;
+	char **old_argv = argv;
+
 	const char *env_options = getenv ("MONO_ENV_OPTIONS");
 	if (env_options != NULL){
 		GPtrArray *array = g_ptr_array_new ();
@@ -85,6 +121,20 @@ mono_main_with_options (int argc, char *argv [])
 		}
 		g_ptr_array_free (array, TRUE);
 	}
+
+#ifndef HOST_WIN32
+	/* pass on a copy of the real argv before possibly clobbering it */
+	if (old_argv == argv){
+		int i;
+		argv = (char**)malloc(sizeof(char**)*old_argc);
+		for (i = 0; i < old_argc; i++){
+			argv[i] = (char*)malloc(sizeof(char*)*strlen(old_argv[i]));
+			strcpy(argv[i], old_argv[i]);
+		}
+	}
+
+	handle_set_process_title(old_argc, old_argv);
+#endif
 
 	return mono_main (argc, argv);
 }
