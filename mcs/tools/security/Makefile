@@ -6,16 +6,18 @@ include ../../build/rules.make
 LOCAL_MCS_FLAGS = /lib:$(topdir)/class/lib/$(PROFILE) -r:Mono.Security.dll
 
 SECURITY_PROGRAMS = secutil.exe cert2spc.exe sn.exe makecert.exe chktrust.exe \
-	signcode.exe setreg.exe certmgr.exe caspol.exe permview.exe mozroots.exe
-SECURITY_PROGRAMS_2_0 = httpcfg.exe
+	signcode.exe setreg.exe caspol.exe permview.exe mozroots.exe
+SECURITY_PROGRAMS_2_0 = httpcfg.exe certmgr.exe
 
 HELPER_SOURCES = AssemblyInfo.cs $(topdir)/build/common/Consts.cs
 SN_SOURCES = sn.cs StrongNameManager.cs $(HELPER_SOURCES)
 
 SECURITY_SOURCES = $(HELPER_SOURCES) $(SN_SOURCES) $(SECURITY_PROGRAMS:.exe=.cs) $(SECURITY_PROGRAMS_2_0:.exe=.cs)
 
+SECURITY_TARGETS = $(SECURITY_PROGRAMS_2_0)
+
 ifeq (net_4_0, $(PROFILE))
-SECURITY_TARGETS = $(SECURITY_PROGRAMS) $(SECURITY_PROGRAMS_2_0)
+SECURITY_TARGETS = $(SECURITY_PROGRAMS)
 endif
 
 PROGRAM_INSTALL_DIR = $(mono_libdir)/mono/$(FRAMEWORK_VERSION)

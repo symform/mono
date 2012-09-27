@@ -58,6 +58,7 @@ scripts_2_0 = \
 	gmcs$(SCRIPT_SUFFIX)			\
 	mdoc$(SCRIPT_SUFFIX)                    \
 	monop2$(SCRIPT_SUFFIX) 			\
+	certmgr$(SCRIPT_SUFFIX)			\
 	resgen2$(SCRIPT_SUFFIX)			\
 	wsdl2$(SCRIPT_SUFFIX)
 
@@ -74,7 +75,6 @@ scripts_4_0 = \
 	soapsuds$(SCRIPT_SUFFIX)		\
 	caspol$(SCRIPT_SUFFIX)			\
 	cert2spc$(SCRIPT_SUFFIX)		\
-	certmgr$(SCRIPT_SUFFIX)			\
 	chktrust$(SCRIPT_SUFFIX)		\
 	csharp$(SCRIPT_SUFFIX)			\
 	httpcfg$(SCRIPT_SUFFIX)			\

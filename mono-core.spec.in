@@ -216,6 +216,7 @@ rm -rf %buildroot
 %_prefix/lib/mono/2.0/gacutil.exe*
 %_prefix/lib/mono/2.0/gmcs.exe*
 %_prefix/lib/mono/2.0/mcs.exe*
+%_prefix/lib/mono/2.0/certmgr.exe*
 %_prefix/lib/mono/2.0/mscorlib.dll*
 %_prefix/lib/mono/4.0/Commons.Xml.Relaxng.dll
 %_prefix/lib/mono/4.0/CustomMarshalers.dll
@@ -245,7 +246,6 @@ rm -rf %buildroot
 %_prefix/lib/mono/4.0/System.Xml.dll
 %_prefix/lib/mono/4.0/System.dll
 %_prefix/lib/mono/4.0/al.exe*
-%_prefix/lib/mono/4.0/certmgr.exe*
 %_prefix/lib/mono/4.0/chktrust.exe*
 %_prefix/lib/mono/4.0/cscompmgd.dll
 %_prefix/lib/mono/4.0/csharp.exe*
