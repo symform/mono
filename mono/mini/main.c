@@ -126,11 +126,12 @@ mono_main_with_options (int argc, char *argv [])
 	/* pass on a copy of the real argv before possibly clobbering it */
 	if (old_argv == argv){
 		int i;
-		argv = (char**)malloc(sizeof(char**)*old_argc);
+		argv = (char**)malloc(sizeof(char**)*(old_argc+1));
 		for (i = 0; i < old_argc; i++){
 			argv[i] = (char*)malloc(sizeof(char*)*strlen(old_argv[i]));
 			strcpy(argv[i], old_argv[i]);
 		}
+		argv[i] = NULL;
 	}
 
 	handle_set_process_title(old_argc, old_argv);
