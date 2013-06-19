@@ -1471,6 +1471,9 @@ mono_arch_get_llvm_call_info (MonoCompile *cfg, MonoMethodSignature *sig)
 				linfo->args [i].pair_storage [j] = arg_storage_to_llvm_arg_storage (cfg, ainfo->pair_storage [j]);
 			*/
 			break;
+		case ArgGSharedVt:
+			linfo->args [i].storage = LLVMArgGSharedVt;
+			break;
 		default:
 			cfg->exception_message = g_strdup ("ainfo->storage");
 			cfg->disable_llvm = TRUE;
@@ -3275,7 +3278,7 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			/* restore ESP/EBP */
 			x86_leave (code);
 			offset = code - cfg->native_code;
-			mono_add_patch_info (cfg, offset, MONO_PATCH_INFO_METHOD_JUMP, ins->inst_p0);
+			mono_add_patch_info (cfg, offset, MONO_PATCH_INFO_METHOD_JUMP, call->method);
 			x86_jump32 (code, 0);
 
 			ins->flags |= MONO_INST_GC_CALLSITE;
@@ -4196,6 +4199,21 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 		}
 		case OP_TLS_GET: {
 			code = mono_x86_emit_tls_get (code, ins->dreg, ins->inst_offset);
+			break;
+		}
+		case OP_TLS_GET_REG: {
+#ifdef __APPLE__
+			// FIXME: tls_gs_offset can change too, do these when calculating the tls offset
+			if (ins->dreg != ins->sreg1)
+				x86_mov_reg_reg (code, ins->dreg, ins->sreg1, sizeof (gpointer));
+			x86_shift_reg_imm (code, X86_SHL, ins->dreg, 2);
+			if (tls_gs_offset)
+				x86_alu_reg_imm (code, X86_ADD, ins->dreg, tls_gs_offset);
+			x86_prefix (code, X86_GS_PREFIX);
+			x86_mov_reg_membase (code, ins->dreg, ins->dreg, 0, sizeof (gpointer));
+#else
+			g_assert_not_reached ();
+#endif
 			break;
 		}
 		case OP_MEMORY_BARRIER: {
