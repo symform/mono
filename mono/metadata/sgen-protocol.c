@@ -43,6 +43,18 @@ struct _BinaryProtocolBuffer {
 static BinaryProtocolBuffer *binary_protocol_buffers = NULL;
 LOCK_DECLARE (binary_protocol_mutex);
 
+void
+binary_protocol_init (const char *filename)
+{
+	binary_protocol_file = fopen (filename, "w");
+}
+
+gboolean
+binary_protocol_is_enabled (void)
+{
+	return binary_protocol_file != NULL;
+}
+
 static void
 binary_protocol_flush_buffers_rec (BinaryProtocolBuffer *buffer)
 {
@@ -57,7 +69,7 @@ binary_protocol_flush_buffers_rec (BinaryProtocolBuffer *buffer)
 	mono_sgen_free_os_memory (buffer, sizeof (BinaryProtocolBuffer));
 }
 
-static void
+void
 binary_protocol_flush_buffers (gboolean force)
 {
 	if (!binary_protocol_file)
@@ -250,6 +262,13 @@ binary_protocol_missing_remset (gpointer obj, gpointer obj_vtable, int offset, g
 	SGenProtocolMissingRemset entry = { obj, obj_vtable, offset, value, value_vtable, value_pinned };
 	protocol_entry (SGEN_PROTOCOL_MISSING_REMSET, &entry, sizeof (SGenProtocolMissingRemset));
 
+}
+
+void
+binary_protocol_dislink_update (gpointer link, gpointer obj, int track)
+{
+	SGenProtocolDislinkUpdate entry = { link, obj, track };
+	protocol_entry (SGEN_PROTOCOL_DISLINK_UPDATE, &entry, sizeof (SGenProtocolDislinkUpdate));
 }
 
 #endif

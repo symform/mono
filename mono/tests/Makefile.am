@@ -375,7 +375,8 @@ BASE_TEST_CS_SRC=		\
 	bug-1147.cs	\
 	mono-path.cs	\
 	bug-bxc-795.cs	\
-	bug-3903.cs
+	bug-3903.cs	\
+	sgen-case-23400.cs
 
 TEST_CS_SRC_DIST=	\
 	$(BASE_TEST_CS_SRC)	\
@@ -507,7 +508,8 @@ TEST_IL_SRC=			\
 	bug-515884.il	\
 	bug-633291.il	\
 	delegate-with-null-target.il	\
-	bug-318677.il
+	bug-318677.il	\
+	invalid_generic_instantiation.il
 
 # pre-requisite test sources: files that are not test themselves
 # but that need to be compiled
@@ -579,6 +581,7 @@ endif
 # test_messages fails on the buildbots
 #test: assemblyresolve/test/asm.dll testjit test-type-load test-generic-sharing test_platform test_2_1 test_messages
 test: assemblyresolve/test/asm.dll testjit test-generic-sharing test-type-load test_platform test_2_1 test-process-exit
+test-wrench: assemblyresolve/test/asm.dll testjit test-generic-sharing test-type-load test_platform test_2_1 test-process-exit
 
 assemblyresolve/test/asm.dll:
 	$(MAKE) -C assemblyresolve prereq

@@ -892,13 +892,22 @@ register_thread_start_argument (MonoThread *thread, struct StartInfo *start_info
 	mono_g_hash_table_insert (thread_start_args, thread, start_info->start_arg);
 }
 
-MonoInternalThread* mono_thread_create_internal (MonoDomain *domain, gpointer func, gpointer arg, gboolean threadpool_thread, guint32 stack_size)
+/*
+ * mono_thread_create_internal:
+ * 
+ * If NO_DETACH is TRUE, then the thread is not detached using pthread_detach (). This is needed to fix the race condition where waiting for a thred to exit only waits for its exit event to be
+ * signalled, which can cause shutdown crashes if the thread shutdown code accesses data already freed by the runtime shutdown.
+ * Currently, this is only used for the finalizer thread.
+ */
+MonoInternalThread*
+mono_thread_create_internal (MonoDomain *domain, gpointer func, gpointer arg, gboolean threadpool_thread, gboolean no_detach, guint32 stack_size)
 {
 	MonoThread *thread;
 	MonoInternalThread *internal;
 	HANDLE thread_handle;
 	struct StartInfo *start_info;
 	gsize tid;
+	guint32 create_flags;
 
 	thread = create_thread_object (domain);
 	internal = create_internal_thread_object ();
@@ -930,8 +939,13 @@ MonoInternalThread* mono_thread_create_internal (MonoDomain *domain, gpointer fu
 	/* Create suspended, so we can do some housekeeping before the thread
 	 * starts
 	 */
+	create_flags = CREATE_SUSPENDED;
+#ifndef HOST_WIN32
+	if (no_detach)
+		create_flags |= CREATE_NO_DETACH;
+#endif
 	thread_handle = mono_create_thread (NULL, stack_size, (LPTHREAD_START_ROUTINE)start_wrapper, start_info,
-				     CREATE_SUSPENDED, &tid);
+				     create_flags, &tid);
 	THREAD_DEBUG (g_message ("%s: Started thread ID %"G_GSIZE_FORMAT" (handle %p)", __func__, tid, thread_handle));
 	if (thread_handle == NULL) {
 		/* The thread couldn't be created, so throw an exception */
@@ -965,7 +979,7 @@ MonoInternalThread* mono_thread_create_internal (MonoDomain *domain, gpointer fu
 void
 mono_thread_create (MonoDomain *domain, gpointer func, gpointer arg)
 {
-	mono_thread_create_internal (domain, func, arg, FALSE, 0);
+	mono_thread_create_internal (domain, func, arg, FALSE, FALSE, 0);
 }
 
 /*
@@ -983,9 +997,21 @@ mono_thread_get_stack_bounds (guint8 **staddr, size_t *stsize)
 	*staddr = (guint8*)((gssize)*staddr & ~(mono_pagesize () - 1));
 	return;
 	/* FIXME: simplify the mess below */
-#elif !defined(HOST_WIN32)
+#elif defined(HOST_WIN32)
+	/* http://en.wikipedia.org/wiki/Win32_Thread_Information_Block */
+	void* tib = (void*)__readfsdword(0x18);
+	guint8 *stackTop = (guint8*)*(int*)((char*)tib + 4);
+	guint8 *stackBottom = (guint8*)*(int*)((char*)tib + 8);
+
+	*staddr = stackBottom;
+	*stsize = stackTop - stackBottom;
+	return;
+#else
 	pthread_attr_t attr;
 	guint8 *current = (guint8*)&attr;
+
+	*staddr = NULL;
+	*stsize = (size_t)-1;
 
 	pthread_attr_init (&attr);
 #  ifdef HAVE_PTHREAD_GETATTR_NP
@@ -1021,9 +1047,6 @@ mono_thread_get_stack_bounds (guint8 **staddr, size_t *stsize)
 #  endif
 
 	pthread_attr_destroy (&attr);
-#else
-	*staddr = NULL;
-	*stsize = (size_t)-1;
 #endif
 
 	/* When running under emacs, sometimes staddr is not aligned to a page size */
@@ -1543,6 +1566,44 @@ gboolean ves_icall_System_Threading_Thread_Join_internal(MonoInternalThread *thi
 	return(FALSE);
 }
 
+static gint32
+mono_wait_uninterrupted (MonoInternalThread *thread, gboolean multiple, guint32 numhandles, gpointer *handles, gboolean waitall, gint32 ms, gboolean alertable)
+{
+	MonoException *exc;
+	guint32 ret;
+	gint64 start;
+	gint32 diff_ms;
+	gint32 wait = ms;
+
+	start = (ms == -1) ? 0 : mono_100ns_ticks ();
+	do {
+		if (multiple)
+			ret = WaitForMultipleObjectsEx (numhandles, handles, waitall, wait, alertable);
+		else
+			ret = WaitForSingleObjectEx (handles [0], ms, alertable);
+
+		if (ret != WAIT_IO_COMPLETION)
+			break;
+
+		exc = mono_thread_execute_interruption (thread);
+		if (exc)
+			mono_raise_exception (exc);
+
+		if (ms == -1)
+			continue;
+
+		/* Re-calculate ms according to the time passed */
+		diff_ms = (mono_100ns_ticks () - start) / 10000;
+		if (diff_ms >= ms) {
+			ret = WAIT_TIMEOUT;
+			break;
+		}
+		wait = ms - diff_ms;
+	} while (TRUE);
+	
+	return ret;
+}
+
 /* FIXME: exitContext isnt documented */
 gboolean ves_icall_System_Threading_WaitHandle_WaitAll_internal(MonoArray *mono_handles, gint32 ms, gboolean exitContext)
 {
@@ -1570,7 +1631,7 @@ gboolean ves_icall_System_Threading_WaitHandle_WaitAll_internal(MonoArray *mono_
 
 	mono_thread_set_state (thread, ThreadState_WaitSleepJoin);
 	
-	ret=WaitForMultipleObjectsEx(numhandles, handles, TRUE, ms, TRUE);
+	ret = mono_wait_uninterrupted (thread, TRUE, numhandles, handles, TRUE, ms, TRUE);
 
 	mono_thread_clr_state (thread, ThreadState_WaitSleepJoin);
 
@@ -1579,12 +1640,7 @@ gboolean ves_icall_System_Threading_WaitHandle_WaitAll_internal(MonoArray *mono_
 	if(ret==WAIT_FAILED) {
 		THREAD_WAIT_DEBUG (g_message ("%s: (%"G_GSIZE_FORMAT") Wait failed", __func__, GetCurrentThreadId ()));
 		return(FALSE);
-	} else if(ret==WAIT_TIMEOUT || ret == WAIT_IO_COMPLETION) {
-		/* Do we want to try again if we get
-		 * WAIT_IO_COMPLETION? The documentation for
-		 * WaitHandle doesn't give any clues.  (We'd have to
-		 * fiddle with the timeout if we retry.)
-		 */
+	} else if(ret==WAIT_TIMEOUT) {
 		THREAD_WAIT_DEBUG (g_message ("%s: (%"G_GSIZE_FORMAT") Wait timed out", __func__, GetCurrentThreadId ()));
 		return(FALSE);
 	}
@@ -1601,7 +1657,6 @@ gint32 ves_icall_System_Threading_WaitHandle_WaitAny_internal(MonoArray *mono_ha
 	guint32 i;
 	MonoObject *waitHandle;
 	MonoInternalThread *thread = mono_thread_internal_current ();
-	guint32 start;
 
 	/* Do this WaitSleepJoin check before creating objects */
 	mono_thread_current_check_pending_interrupt ();
@@ -1620,20 +1675,7 @@ gint32 ves_icall_System_Threading_WaitHandle_WaitAny_internal(MonoArray *mono_ha
 
 	mono_thread_set_state (thread, ThreadState_WaitSleepJoin);
 
-	start = (ms == -1) ? 0 : mono_msec_ticks ();
-	do {
-		ret = WaitForMultipleObjectsEx (numhandles, handles, FALSE, ms, TRUE);
-		if (ret != WAIT_IO_COMPLETION)
-			break;
-		if (ms != -1) {
-			guint32 diff;
-
-			diff = mono_msec_ticks () - start;
-			ms -= diff;
-			if (ms <= 0)
-				break;
-		}
-	} while (ms == -1 || ms > 0);
+	ret = mono_wait_uninterrupted (thread, TRUE, numhandles, handles, FALSE, ms, TRUE);
 
 	mono_thread_clr_state (thread, ThreadState_WaitSleepJoin);
 	
@@ -1671,19 +1713,14 @@ gboolean ves_icall_System_Threading_WaitHandle_WaitOne_internal(MonoObject *this
 
 	mono_thread_set_state (thread, ThreadState_WaitSleepJoin);
 	
-	ret=WaitForSingleObjectEx (handle, ms, TRUE);
+	ret = mono_wait_uninterrupted (thread, FALSE, 1, &handle, FALSE, ms, TRUE);
 	
 	mono_thread_clr_state (thread, ThreadState_WaitSleepJoin);
 	
 	if(ret==WAIT_FAILED) {
 		THREAD_WAIT_DEBUG (g_message ("%s: (%"G_GSIZE_FORMAT") Wait failed", __func__, GetCurrentThreadId ()));
 		return(FALSE);
-	} else if(ret==WAIT_TIMEOUT || ret == WAIT_IO_COMPLETION) {
-		/* Do we want to try again if we get
-		 * WAIT_IO_COMPLETION? The documentation for
-		 * WaitHandle doesn't give any clues.  (We'd have to
-		 * fiddle with the timeout if we retry.)
-		 */
+	} else if(ret==WAIT_TIMEOUT) {
 		THREAD_WAIT_DEBUG (g_message ("%s: (%"G_GSIZE_FORMAT") Wait timed out", __func__, GetCurrentThreadId ()));
 		return(FALSE);
 	}
@@ -2242,13 +2279,14 @@ mono_thread_get_abort_signal (void)
 {
 #ifdef HOST_WIN32
 	return -1;
-#else
-#ifndef	SIGRTMIN
+#elif defined(PLATFORM_ANDROID)
+	return SIGUNUSED;
+#elif !defined (SIGRTMIN)
 #ifdef SIGUSR1
 	return SIGUSR1;
 #else
 	return -1;
-#endif
+#endif /* SIGUSR1 */
 #else
 	static int abort_signum = -1;
 	int i;
@@ -2265,7 +2303,6 @@ mono_thread_get_abort_signal (void)
 	}
 	/* fallback to the old way */
 	return SIGRTMIN;
-#endif
 #endif /* HOST_WIN32 */
 }
 
@@ -3758,7 +3795,7 @@ search_tls_slot_in_freelist (StaticDataInfo *static_data, guint32 size, guint32 
 }
 
 static void
-update_tls_reference_bitmap (guint32 offset, uintptr_t *bitmap, int max_set)
+update_tls_reference_bitmap (guint32 offset, uintptr_t *bitmap, int numbits)
 {
 	int i;
 	int idx = (offset >> 24) - 1;
@@ -3769,7 +3806,7 @@ update_tls_reference_bitmap (guint32 offset, uintptr_t *bitmap, int max_set)
 	offset &= 0xffffff;
 	offset /= sizeof (gpointer);
 	/* offset is now the bitmap offset */
-	for (i = 0; i < max_set; ++i) {
+	for (i = 0; i < numbits; ++i) {
 		if (bitmap [i / sizeof (uintptr_t)] & (1L << (i & (sizeof (uintptr_t) * 8 -1))))
 			rb [(offset + i) / (sizeof (uintptr_t) * 8)] |= (1L << ((offset + i) & (sizeof (uintptr_t) * 8 -1)));
 	}
@@ -3799,7 +3836,7 @@ clear_reference_bitmap (guint32 offset, guint32 size)
  */
 
 guint32
-mono_alloc_special_static_data (guint32 static_type, guint32 size, guint32 align, uintptr_t *bitmap, int max_set)
+mono_alloc_special_static_data (guint32 static_type, guint32 size, guint32 align, uintptr_t *bitmap, int numbits)
 {
 	guint32 offset;
 	if (static_type == SPECIAL_STATIC_THREAD) {
@@ -3813,7 +3850,7 @@ mono_alloc_special_static_data (guint32 static_type, guint32 size, guint32 align
 		} else {
 			offset = mono_alloc_static_data_slot (&thread_static_info, size, align);
 		}
-		update_tls_reference_bitmap (offset, bitmap, max_set);
+		update_tls_reference_bitmap (offset, bitmap, numbits);
 		/* This can be called during startup */
 		if (threads != NULL)
 			mono_g_hash_table_foreach (threads, alloc_thread_static_data_helper, GUINT_TO_POINTER (offset));

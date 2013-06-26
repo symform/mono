@@ -88,7 +88,7 @@ namespace System
 					local = ZoneInfoDB.Default;
 #elif MONOTOUCH
 					using (Stream stream = GetMonoTouchDefault ()) {
-						return BuildFromStream ("Local", stream);
+						local = BuildFromStream ("Local", stream);
 					}
 #elif LIBC
 					try {
@@ -374,7 +374,10 @@ namespace System
 			}
 #endif
 #if MONODROID
-			return ZoneInfoDB.GetTimeZone (id);
+			var timeZoneInfo = ZoneInfoDB.GetTimeZone (id);
+			if (timeZoneInfo == null)
+				throw new TimeZoneNotFoundException ();
+			return timeZoneInfo;
 #else
 			// Local requires special logic that already exists in the Local property (bug #326)
 			if (id == "Local")
@@ -596,7 +599,9 @@ namespace System
 #endif
 #if MONODROID
 			foreach (string id in ZoneInfoDB.GetAvailableIds ()) {
-				systemTimeZones.Add (ZoneInfoDB.GetTimeZone (id));
+				var tz = ZoneInfoDB.GetTimeZone (id);
+				if (tz != null)
+					systemTimeZones.Add (tz);
 			}
 #elif MONOTOUCH
 				if (systemTimeZones.Count == 0) {

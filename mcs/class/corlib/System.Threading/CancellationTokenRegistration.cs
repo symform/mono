@@ -44,7 +44,8 @@ namespace System.Threading
 		#region IDisposable implementation
 		public void Dispose ()
 		{
-			source.RemoveCallback (this);
+			if (source != null)
+				source.RemoveCallback (this);
 		}
 		#endregion
 
@@ -67,7 +68,7 @@ namespace System.Threading
 		
 		public override int GetHashCode ()
 		{
-			return id.GetHashCode () ^ source.GetHashCode ();
+			return id.GetHashCode () ^ (source == null ? 0 : source.GetHashCode ());
 		}
 
 		public override bool Equals (object obj)

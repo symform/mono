@@ -40,7 +40,18 @@ namespace System.Net
 		public WebHeaderCollection Headers;
 		public Version Version;
 		public Stream stream;
-		public string Challenge;
+		public string[] Challenge;
+		ReadState _readState;
+
+		public WebConnectionData ()
+		{
+			_readState = ReadState.None;
+		}
+
+		public WebConnectionData (HttpWebRequest request)
+		{
+			this.request = request;
+		}
 
 		public void Init ()
 		{
@@ -49,6 +60,19 @@ namespace System.Net
 			StatusDescription = null;
 			Headers = null;
 			stream = null;
+		}
+
+		public ReadState ReadState {
+			get {
+				return _readState;
+			}
+			set {
+				lock (this) {
+					if ((_readState == ReadState.Aborted) && (value != ReadState.Aborted))
+						throw new WebException ("Aborted", WebExceptionStatus.RequestCanceled);
+					_readState = value;
+				}
+			}
 		}
 	}
 }

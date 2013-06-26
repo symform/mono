@@ -74,10 +74,12 @@ namespace System.Net
 #endif
 		class SPKey {
 			Uri uri; // schema/host/port
+			Uri proxy;
 			bool use_connect;
 
-			public SPKey (Uri uri, bool use_connect) {
+			public SPKey (Uri uri, Uri proxy, bool use_connect) {
 				this.uri = uri;
+				this.proxy = proxy;
 				this.use_connect = use_connect;
 			}
 
@@ -89,8 +91,16 @@ namespace System.Net
 				get { return use_connect; }
 			}
 
+			public bool UsesProxy {
+				get { return proxy != null; }
+			}
+
 			public override int GetHashCode () {
-				return uri.GetHashCode () + ((use_connect) ? 1 : 0);
+				int hash = 23;
+				hash = hash * 31 + ((use_connect) ? 1 : 0);
+				hash = hash * 31 + uri.GetHashCode ();
+				hash = hash * 31 + (proxy != null ? proxy.GetHashCode () : 0);
+				return hash;
 			}
 
 			public override bool Equals (object obj) {
@@ -99,7 +109,13 @@ namespace System.Net
 					return false;
 				}
 
-				return (uri.Equals (other.uri) && other.use_connect == use_connect);
+				if (!uri.Equals (other.uri))
+					return false;
+				if (use_connect != other.use_connect || UsesProxy != other.UsesProxy)
+					return false;
+				if (UsesProxy && !proxy.Equals (other.proxy))
+					return false;
+				return true;
 			}
 		}
 
@@ -296,6 +312,8 @@ namespace System.Net
 				throw new ArgumentNullException ("address");
 
 			RecycleServicePoints ();
+
+			var origAddress = new Uri (address.Scheme + "://" + address.Authority);
 			
 			bool usesProxy = false;
 			bool useConnect = false;
@@ -314,7 +332,7 @@ namespace System.Net
 			
 			ServicePoint sp = null;
 			lock (servicePoints) {
-				SPKey key = new SPKey (address, useConnect);
+				SPKey key = new SPKey (origAddress, usesProxy ? address : null, useConnect);
 				sp = servicePoints [key] as ServicePoint;
 				if (sp != null)
 					return sp;
@@ -402,19 +420,8 @@ namespace System.Net
 			static bool is_macosx = System.IO.File.Exists (MSX.OSX509Certificates.SecurityLibrary);
 			static X509RevocationMode revocation_mode;
 
-#if MONODROID
-			static readonly Converter<Mono.Security.X509.X509CertificateCollection, bool> monodroidCallback;
-#endif
-
 			static ChainValidationHelper ()
 			{
-#if MONODROID
-				monodroidCallback = (Converter<Mono.Security.X509.X509CertificateCollection, bool>)
-					Delegate.CreateDelegate (typeof(Converter<Mono.Security.X509.X509CertificateCollection, bool>), 
-							Type.GetType ("Android.Runtime.AndroidEnvironment, Mono.Android", true)
-							.GetMethod ("TrustEvaluateSsl", 
-								System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic));
-#endif
 #if !MONOTOUCH
 				revocation_mode = X509RevocationMode.NoCheck;
 				try {
@@ -458,7 +465,15 @@ namespace System.Net
 				int status11 = 0; // Error code passed to the obsolete ICertificatePolicy callback
 				SslPolicyErrors errors = 0;
 				X509Chain chain = null;
-#if !MONOTOUCH
+				bool result = false;
+#if MONOTOUCH
+				// The X509Chain is not really usable with MonoTouch (since the decision is not based on this data)
+				// However if someone wants to override the results (good or bad) from iOS then they will want all
+				// the certificates that the server provided (which generally does not include the root) so, only  
+				// if there's a user callback, we'll create the X509Chain but won't build it
+				// ref: https://bugzilla.xamarin.com/show_bug.cgi?id=7245
+				if (cb != null) {
+#endif
 				chain = new X509Chain ();
 				chain.ChainPolicy = new X509ChainPolicy ();
 				chain.ChainPolicy.RevocationMode = revocation_mode;
@@ -466,7 +481,9 @@ namespace System.Net
 					X509Certificate2 c2 = new X509Certificate2 (certs [i].RawData);
 					chain.ChainPolicy.ExtraStore.Add (c2);
 				}
-
+#if MONOTOUCH
+				}
+#else
 				try {
 					if (!chain.Build (leaf))
 						errors |= GetErrorsFromChain (chain);
@@ -475,49 +492,54 @@ namespace System.Net
 					Console.Error.WriteLine ("Please, report this problem to the Mono team");
 					errors |= SslPolicyErrors.RemoteCertificateChainErrors;
 				}
-#endif
-				if (!CheckCertificateUsage (leaf)) {
-					errors |= SslPolicyErrors.RemoteCertificateChainErrors;
-					status11 = -2146762490; //CERT_E_PURPOSE 0x800B0106
-				}
 
-				if (!CheckServerIdentity (certs [0], Host)) {
-					errors |= SslPolicyErrors.RemoteCertificateNameMismatch;
-					status11 = -2146762481; // CERT_E_CN_NO_MATCH 0x800B010F
-				}
+				// for OSX and iOS we're using the native API to check for the SSL server policy and host names
+				if (!is_macosx) {
+					if (!CheckCertificateUsage (leaf)) {
+						errors |= SslPolicyErrors.RemoteCertificateChainErrors;
+						status11 = -2146762490; //CERT_E_PURPOSE 0x800B0106
+					}
 
-				bool result = false;
-				// No certificate root found means no mozroots or monotouch
-#if !MONOTOUCH
-				if (is_macosx) {
+					if (!CheckServerIdentity (certs [0], Host)) {
+						errors |= SslPolicyErrors.RemoteCertificateNameMismatch;
+						status11 = -2146762481; // CERT_E_CN_NO_MATCH 0x800B010F
+					}
+				} else {
 #endif
 					// Attempt to use OSX certificates
 					// Ideally we should return the SecTrustResult
-					MSX.OSX509Certificates.SecTrustResult trustResult;
+					MSX.OSX509Certificates.SecTrustResult trustResult = MSX.OSX509Certificates.SecTrustResult.Deny;
 					try {
-						trustResult = MSX.OSX509Certificates.TrustEvaluateSsl (certs);
+						trustResult = MSX.OSX509Certificates.TrustEvaluateSsl (certs, Host);
 						// We could use the other values of trustResult to pass this extra information
 						// to the .NET 2 callback for values like SecTrustResult.Confirm
 						result = (trustResult == MSX.OSX509Certificates.SecTrustResult.Proceed ||
 								  trustResult == MSX.OSX509Certificates.SecTrustResult.Unspecified);
-
 					} catch {
 						// Ignore
 					}
-					// Clear error status if the OS told us to trust the certificate
+					
 					if (result) {
-						status11 = 0;
+						// TrustEvaluateSsl was successful so there's no trust error
+						// IOW we discard our own chain (since we trust OSX one instead)
 						errors = 0;
+					} else {
+						// callback and DefaultCertificatePolicy needs this since 'result' is not specified
+						status11 = (int) trustResult;
+						errors |= SslPolicyErrors.RemoteCertificateChainErrors;
 					}
 #if !MONOTOUCH
 				}
 #endif
 
 #if MONODROID
-				result = monodroidCallback (certs);
+				result = AndroidPlatform.TrustEvaluateSsl (certs, sender, leaf, chain, errors);
 				if (result) {
-					status11 = 0;
-					errors = 0;
+					// chain.Build() + GetErrorsFromChain() (above) will ALWAYS fail on
+					// Android (there are no mozroots or preinstalled root certificates),
+					// thus `errors` will ALWAYS have RemoteCertificateChainErrors.
+					// Android just verified the chain; clear RemoteCertificateChainErrors.
+					errors  &= ~SslPolicyErrors.RemoteCertificateChainErrors;
 				}
 #endif
 
@@ -599,7 +621,7 @@ namespace System.Net
 				}
 				return (int) result;
 			}
-
+#if !MONOTOUCH
 			static SslPolicyErrors GetErrorsFromChain (X509Chain chain)
 			{
 				SslPolicyErrors errors = SslPolicyErrors.None;
@@ -760,6 +782,7 @@ namespace System.Net
 				string start = pattern.Substring (0, index);
 				return (String.Compare (hostname, 0, start, 0, start.Length, true, CultureInfo.InvariantCulture) == 0);
 			}
+#endif
 		}
 #endif
 	}

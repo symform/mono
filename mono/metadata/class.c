@@ -513,6 +513,21 @@ mono_class_is_open_constructed_type (MonoType *t)
 	}
 }
 
+/*
+This is a simple function to catch the most common bad instances of generic types.
+Specially those that might lead to further failures in the runtime.
+*/
+static gboolean
+is_valid_generic_argument (MonoType *type)
+{
+	switch (type->type) {
+	case MONO_TYPE_VOID:
+	case MONO_TYPE_TYPEDBYREF:
+		return FALSE;
+	}
+	return TRUE;
+}
+
 static MonoType*
 inflate_generic_type (MonoImage *image, MonoType *type, MonoGenericContext *context, MonoError *error)
 {
@@ -532,6 +547,12 @@ inflate_generic_type (MonoImage *image, MonoType *type, MonoGenericContext *cont
 			return NULL;
 		}
 
+		if (!is_valid_generic_argument (inst->type_argv [num])) {
+			MonoGenericParamInfo *info = mono_generic_param_info (type->data.generic_param);
+			mono_error_set_bad_image (error, image, "MVAR %d (%s) cannot be expanded with type 0x%x",
+				num, info ? info->name : "", inst->type_argv [num]->type);
+			return NULL;			
+		}
 		/*
 		 * Note that the VAR/MVAR cases are different from the rest.  The other cases duplicate @type,
 		 * while the VAR/MVAR duplicates a type from the context.  So, we need to ensure that the
@@ -553,6 +574,12 @@ inflate_generic_type (MonoImage *image, MonoType *type, MonoGenericContext *cont
 			mono_error_set_bad_image (error, image, "VAR %d (%s) cannot be expanded in this context with %d instantiations",
 				num, info ? info->name : "", inst->type_argc);
 			return NULL;
+		}
+		if (!is_valid_generic_argument (inst->type_argv [num])) {
+			MonoGenericParamInfo *info = mono_generic_param_info (type->data.generic_param);
+			mono_error_set_bad_image (error, image, "VAR %d (%s) cannot be expanded with type 0x%x",
+				num, info ? info->name : "", inst->type_argv [num]->type);
+			return NULL;			
 		}
 		nt = mono_metadata_type_dup (image, inst->type_argv [num]);
 		nt->byref = type->byref;
@@ -1328,7 +1355,7 @@ mono_class_setup_fields (MonoClass *class)
 	MonoGenericContainer *container = NULL;
 	MonoClass *gtd = class->generic_class ? mono_class_get_generic_type_definition (class) : NULL;
 
-	if (class->size_inited)
+	if (class->setup_fields_called)
 		return;
 
 	if (class->generic_class && class->generic_class->container_class->image->dynamic && !class->generic_class->container_class->wastypebuilder) {
@@ -1397,8 +1424,9 @@ mono_class_setup_fields (MonoClass *class)
 		if (explicit_size && real_size) {
 			class->instance_size = MAX (real_size, class->instance_size);
 		}
-		class->size_inited = 1;
 		class->blittable = blittable;
+		mono_memory_barrier ();
+		class->size_inited = 1;
 		return;
 	}
 
@@ -1406,7 +1434,7 @@ mono_class_setup_fields (MonoClass *class)
 		blittable = FALSE;
 
 	/* Prevent infinite loops if the class references itself */
-	class->size_inited = 1;
+	class->setup_fields_called = 1;
 
 	if (class->generic_container) {
 		container = class->generic_container;
@@ -1805,6 +1833,7 @@ mono_class_layout_fields (MonoClass *class)
 			class->min_align = MAX (class->min_align, class->instance_size - sizeof (MonoObject));
 	}
 
+	mono_memory_barrier ();
 	class->size_inited = 1;
 
 	/*
@@ -5547,6 +5576,7 @@ mono_generic_class_get_class (MonoGenericClass *gclass)
 			 */
 			klass->instance_size = gklass->instance_size;
 			klass->sizes.class_size = gklass->sizes.class_size;
+			mono_memory_barrier ();
 			klass->size_inited = 1;
 		}
 	}
@@ -5636,6 +5666,7 @@ make_generic_param_class (MonoGenericParam *param, MonoImage *image, gboolean is
 	/*Init these fields to sane values*/
 	klass->min_align = 1;
 	klass->instance_size = sizeof (gpointer);
+	mono_memory_barrier ();
 	klass->size_inited = 1;
 
 	mono_class_setup_supertypes (klass);

@@ -1290,6 +1290,11 @@ mono_image_add_cattrs (MonoDynamicImage *assembly, guint32 idx, guint32 type, Mo
 		switch (mono_metadata_token_table (token)) {
 		case MONO_TABLE_METHOD:
 			type |= MONO_CUSTOM_ATTR_TYPE_METHODDEF;
+			/*
+			 * fixup_cattrs () needs to fix this up. We can't use image->tokens, since it contains the old token for the
+			 * method, not the one returned by mono_image_create_token ().
+			 */
+			mono_g_hash_table_insert (assembly->remapped_tokens, GUINT_TO_POINTER (token), cattr->ctor);
 			break;
 		case MONO_TABLE_MEMBERREF:
 			type |= MONO_CUSTOM_ATTR_TYPE_MEMBERREF;
@@ -2739,7 +2744,7 @@ mono_image_get_fieldref_token (MonoDynamicImage *assembly, MonoObject *f, MonoCl
 
 	if (field->parent->generic_class && field->parent->generic_class->container_class && field->parent->generic_class->container_class->fields) {
 		int index = field - field->parent->fields;
-		type = field->parent->generic_class->container_class->fields [index].type;
+		type = mono_field_get_type (&field->parent->generic_class->container_class->fields [index]);
 	} else {
 		if (is_field_on_inst (field))
 			type = get_field_on_inst_generic_type (field);
@@ -4321,11 +4326,15 @@ fixup_cattrs (MonoDynamicImage *assembly)
 		if ((type & MONO_CUSTOM_ATTR_TYPE_MASK) == MONO_CUSTOM_ATTR_TYPE_METHODDEF) {
 			idx = type >> MONO_CUSTOM_ATTR_TYPE_BITS;
 			token = mono_metadata_make_token (MONO_TABLE_METHOD, idx);
-			ctor = mono_g_hash_table_lookup (assembly->tokens, GUINT_TO_POINTER (token));
+			ctor = mono_g_hash_table_lookup (assembly->remapped_tokens, GUINT_TO_POINTER (token));
 			g_assert (ctor);
 
-			if (!strcmp (ctor->vtable->klass->name, "MonoCMethod")|| !strcmp (ctor->vtable->klass->name, "ConstructorBuilder")) {
+			if (!strcmp (ctor->vtable->klass->name, "MonoCMethod")) {
 				MonoMethod *m = ((MonoReflectionMethod*)ctor)->method;
+				idx = GPOINTER_TO_UINT (g_hash_table_lookup (assembly->method_to_table_idx, m));
+				values [MONO_CUSTOM_ATTR_TYPE] = (idx << MONO_CUSTOM_ATTR_TYPE_BITS) | MONO_CUSTOM_ATTR_TYPE_METHODDEF;
+			} else if (!strcmp (ctor->vtable->klass->name, "ConstructorBuilder")) {
+				MonoMethod *m = ((MonoReflectionCtorBuilder*)ctor)->mhandle;
 				idx = GPOINTER_TO_UINT (g_hash_table_lookup (assembly->method_to_table_idx, m));
 				values [MONO_CUSTOM_ATTR_TYPE] = (idx << MONO_CUSTOM_ATTR_TYPE_BITS) | MONO_CUSTOM_ATTR_TYPE_METHODDEF;
 			}
@@ -5107,6 +5116,7 @@ create_dynamic_mono_image (MonoDynamicAssembly *assembly, char *assembly_name, c
 	image->typeref = g_hash_table_new ((GHashFunc)mono_metadata_type_hash, (GCompareFunc)mono_metadata_type_equal);
 	image->blob_cache = g_hash_table_new ((GHashFunc)mono_blob_entry_hash, (GCompareFunc)mono_blob_entry_equal);
 	image->gen_params = g_ptr_array_new ();
+	image->remapped_tokens = mono_g_hash_table_new_type (NULL, NULL, MONO_HASH_VALUE_GC);
 
 	/*g_print ("string heap create for image %p (%s)\n", image, module_name);*/
 	string_heap_init (&image->sheap);
@@ -5166,6 +5176,8 @@ mono_dynamic_image_free (MonoDynamicImage *image)
 		mono_g_hash_table_destroy (di->handleref_managed);
 	if (di->tokens)
 		mono_g_hash_table_destroy (di->tokens);
+	if (di->remapped_tokens)
+		mono_g_hash_table_destroy (di->remapped_tokens);
 	if (di->generic_def_objects)
 		mono_g_hash_table_destroy (di->generic_def_objects);
 	if (di->blob_cache) {
@@ -6822,7 +6834,7 @@ mono_param_get_objects_internal (MonoDomain *domain, MonoMethod *method, MonoCla
 		}
 
 		if (mspecs [i + 1])
-			MONO_OBJECT_SETREF (param, MarshalAsImpl, (MonoObject*)mono_reflection_marshal_from_marshal_spec (domain, method->klass, mspecs [i + 1]));
+			MONO_OBJECT_SETREF (param, MarshalAsImpl, (MonoObject*)mono_reflection_marshal_as_attribute_from_marshal_spec (domain, method->klass, mspecs [i + 1]));
 		
 		mono_array_setref (res, i, param);
 	}
@@ -9979,45 +9991,46 @@ mono_marshal_spec_from_builder (MonoImage *image, MonoAssembly *assembly,
 }
 #endif /* !DISABLE_REFLECTION_EMIT */
 
-MonoReflectionMarshal*
-mono_reflection_marshal_from_marshal_spec (MonoDomain *domain, MonoClass *klass,
+MonoReflectionMarshalAsAttribute*
+mono_reflection_marshal_as_attribute_from_marshal_spec (MonoDomain *domain, MonoClass *klass,
 										   MonoMarshalSpec *spec)
 {
-	static MonoClass *System_Reflection_Emit_UnmanagedMarshalClass;
-	MonoReflectionMarshal *minfo;
+	static MonoClass *System_Reflection_Emit_MarshalAsAttribute;
+	MonoReflectionMarshalAsAttribute *minfo;
 	MonoType *mtype;
 
-	if (!System_Reflection_Emit_UnmanagedMarshalClass) {
-		System_Reflection_Emit_UnmanagedMarshalClass = mono_class_from_name (
-		   mono_defaults.corlib, "System.Reflection.Emit", "UnmanagedMarshal");
-		g_assert (System_Reflection_Emit_UnmanagedMarshalClass);
+	if (!System_Reflection_Emit_MarshalAsAttribute) {
+		System_Reflection_Emit_MarshalAsAttribute = mono_class_from_name (
+		   mono_defaults.corlib, "System.Runtime.InteropServices", "MarshalAsAttribute");
+		g_assert (System_Reflection_Emit_MarshalAsAttribute);
 	}
 
-	minfo = (MonoReflectionMarshal*)mono_object_new (domain, System_Reflection_Emit_UnmanagedMarshalClass);
-	minfo->type = spec->native;
+	minfo = (MonoReflectionMarshalAsAttribute*)mono_object_new (domain, System_Reflection_Emit_MarshalAsAttribute);
+	minfo->utype = spec->native;
 
-	switch (minfo->type) {
+	switch (minfo->utype) {
 	case MONO_NATIVE_LPARRAY:
-		minfo->eltype = spec->data.array_data.elem_type;
-		minfo->count = spec->data.array_data.num_elem;
-		minfo->param_num = spec->data.array_data.param_num;
+		minfo->array_subtype = spec->data.array_data.elem_type;
+		minfo->size_const = spec->data.array_data.num_elem;
+		if (spec->data.array_data.param_num != -1)
+			minfo->size_param_index = spec->data.array_data.param_num;
 		break;
 
 	case MONO_NATIVE_BYVALTSTR:
 	case MONO_NATIVE_BYVALARRAY:
-		minfo->count = spec->data.array_data.num_elem;
+		minfo->size_const = spec->data.array_data.num_elem;
 		break;
 
 	case MONO_NATIVE_CUSTOM:
 		if (spec->data.custom_data.custom_name) {
 			mtype = mono_reflection_type_from_name (spec->data.custom_data.custom_name, klass->image);
 			if (mtype)
-				MONO_OBJECT_SETREF (minfo, marshaltyperef, mono_type_get_object (domain, mtype));
+				MONO_OBJECT_SETREF (minfo, marshal_type_ref, mono_type_get_object (domain, mtype));
 
-			MONO_OBJECT_SETREF (minfo, marshaltype, mono_string_new (domain, spec->data.custom_data.custom_name));
+			MONO_OBJECT_SETREF (minfo, marshal_type, mono_string_new (domain, spec->data.custom_data.custom_name));
 		}
 		if (spec->data.custom_data.cookie)
-			MONO_OBJECT_SETREF (minfo, mcookie, mono_string_new (domain, spec->data.custom_data.cookie));
+			MONO_OBJECT_SETREF (minfo, marshal_cookie, mono_string_new (domain, spec->data.custom_data.cookie));
 		break;
 
 	default:
@@ -11926,7 +11939,14 @@ resolve_object (MonoImage *image, MonoObject *obj, MonoClass **handle_class, Mon
 				is_sre_pointer (mono_object_get_class(obj))) {
 		MonoReflectionType *ref_type = (MonoReflectionType *)obj;
 		MonoType *type = mono_reflection_type_get_handle (ref_type);
-		result = mono_class_from_mono_type (type);
+
+		if (context) {
+			MonoType *inflated = mono_class_inflate_generic_type (type, context);
+			result = mono_class_from_mono_type (inflated);
+			mono_metadata_free_type (inflated);
+		} else {
+			result = mono_class_from_mono_type (type);
+		}
 		*handle_class = mono_defaults.typehandle_class;
 	} else {
 		g_print ("%s\n", obj->vtable->klass->name);

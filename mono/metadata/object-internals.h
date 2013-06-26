@@ -82,7 +82,7 @@
 #endif
 
 #define MONO_CHECK_ARG(arg, expr)		G_STMT_START{		  \
-     if (!(expr))							  \
+		if (G_UNLIKELY (!(expr)))							  \
        {								  \
 		MonoException *ex;					  \
 		char *msg = g_strdup_printf ("assertion `%s' failed",	  \
@@ -94,7 +94,7 @@
        };				}G_STMT_END
 
 #define MONO_CHECK_ARG_NULL(arg)	    G_STMT_START{		  \
-     if (arg == NULL)							  \
+		if (G_UNLIKELY (arg == NULL))						  \
        {								  \
 		MonoException *ex;					  \
 		if (arg) {} /* check if the name exists */		  \
@@ -244,6 +244,7 @@ struct _MonoException {
 	gint32	    hresult;
 	MonoString *source;
 	MonoObject *_data;
+	MonoArray  *native_trace_ips;
 };
 
 typedef struct {
@@ -406,12 +407,14 @@ struct _MonoInternalThread {
 	gpointer interrupt_on_stop;
 	gsize    flags;
 	gpointer android_tid;
+
 	/* 
 	 * These fields are used to avoid having to increment corlib versions
 	 * when a new field is added to the unmanaged MonoThread structure.
 	 */
-	gpointer unused5;
+	MonoMethod *async_invoke_method;
 	gint32 managed_id;
+	gint32 ignore_next_signal;
 };
 
 struct _MonoThread {
@@ -1210,6 +1213,21 @@ typedef struct {
 
 typedef struct {
 	MonoObject object;
+	MonoString *marshal_cookie;
+	MonoString *marshal_type;
+	MonoReflectionType *marshal_type_ref;
+	MonoReflectionType *marshal_safe_array_user_defined_subtype;
+	guint32 utype;
+	guint32 array_subtype;
+	gint32 safe_array_subtype;
+	gint32 size_const;
+	gint32 IidParameterIndex;
+	gint16 size_param_index;
+} MonoReflectionMarshalAsAttribute;
+
+
+typedef struct {
+	MonoObject object;
 	gint32 call_conv;
 	gint32 charset;
 	MonoString *dll;
@@ -1379,7 +1397,7 @@ MonoArray  *mono_reflection_sighelper_get_signature_local (MonoReflectionSigHelp
 
 MonoArray  *mono_reflection_sighelper_get_signature_field (MonoReflectionSigHelper *sig) MONO_INTERNAL;
 
-MonoReflectionMarshal* mono_reflection_marshal_from_marshal_spec (MonoDomain *domain, MonoClass *klass, MonoMarshalSpec *spec) MONO_INTERNAL;
+MonoReflectionMarshalAsAttribute* mono_reflection_marshal_as_attribute_from_marshal_spec (MonoDomain *domain, MonoClass *klass, MonoMarshalSpec *spec) MONO_INTERNAL;
 
 gpointer
 mono_reflection_lookup_dynamic_token (MonoImage *image, guint32 token, gboolean valid_token, MonoClass **handle_class, MonoGenericContext *context) MONO_INTERNAL;
@@ -1541,6 +1559,12 @@ mono_object_new_pinned (MonoDomain *domain, MonoClass *klass) MONO_INTERNAL;
 
 void
 mono_field_static_get_value_for_thread (MonoInternalThread *thread, MonoVTable *vt, MonoClassField *field, void *value) MONO_INTERNAL;
+
+char *
+mono_exception_get_native_backtrace (MonoException *exc) MONO_INTERNAL;
+
+MonoString *
+ves_icall_Mono_Runtime_GetNativeStackTrace (MonoException *exc) MONO_INTERNAL;
 
 #endif /* __MONO_OBJECT_INTERNALS_H__ */
 

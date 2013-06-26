@@ -178,8 +178,10 @@ mono_mprotect (void *addr, size_t length, int flags)
 void*
 mono_shared_area (void)
 {
+	if (!malloced_shared_area)
+		malloced_shared_area = malloc_shared_area (0);
 	/* get the pid here */
-	return malloc_shared_area (0);
+	return malloced_shared_area;
 }
 
 void
@@ -187,6 +189,7 @@ mono_shared_area_remove (void)
 {
 	if (malloced_shared_area)
 		g_free (malloced_shared_area);
+	malloced_shared_area = NULL;
 }
 
 void*
@@ -423,6 +426,20 @@ mono_mprotect (void *addr, size_t length, int flags)
 }
 #endif // HAVE_MMAP
 
+static int use_shared_area;
+
+static gboolean
+shared_area_disabled (void)
+{
+	if (!use_shared_area) {
+		if (g_getenv ("MONO_DISABLE_SHARED_AREA"))
+			use_shared_area = -1;
+		else
+			use_shared_area = 1;
+	}
+	return use_shared_area == -1;
+}
+
 #if defined(HAVE_SHM_OPEN) && !defined (DISABLE_SHARED_PERFCOUNTERS)
 
 static int
@@ -492,6 +509,13 @@ mono_shared_area (void)
 	void *res;
 	SAreaHeader *header;
 
+	if (shared_area_disabled ()) {
+		if (!malloced_shared_area)
+			malloced_shared_area = malloc_shared_area (0);
+		/* get the pid here */
+		return malloced_shared_area;
+	}
+
 	/* perform cleanup of segments left over from dead processes */
 	mono_shared_area_instances_helper (NULL, 0, TRUE);
 
@@ -534,6 +558,13 @@ void
 mono_shared_area_remove (void)
 {
 	char buf [128];
+
+	if (shared_area_disabled ()) {
+		if (malloced_shared_area)
+			g_free (malloced_shared_area);
+		return;
+	}
+
 	g_snprintf (buf, sizeof (buf), "/mono.%d", getpid ());
 	shm_unlink (buf);
 	if (malloced_shared_area)
@@ -548,6 +579,9 @@ mono_shared_area_for_pid (void *pid)
 	int size = mono_pagesize ();
 	char buf [128];
 	void *res;
+
+	if (shared_area_disabled ())
+		return NULL;
 
 	g_snprintf (buf, sizeof (buf), "/mono.%d", GPOINTER_TO_INT (pid));
 
@@ -581,7 +615,10 @@ mono_shared_area_instances (void **array, int count)
 void*
 mono_shared_area (void)
 {
-	return malloc_shared_area (getpid ());
+	if (!malloced_shared_area)
+		malloced_shared_area = malloc_shared_area (getpid ());
+	/* get the pid here */
+	return malloced_shared_area;
 }
 
 void

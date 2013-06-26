@@ -59,16 +59,6 @@ mono_gc_get_heap_size (void)
 	return 2*1024*1024;
 }
 
-void
-mono_gc_disable (void)
-{
-}
-
-void
-mono_gc_enable (void)
-{
-}
-
 gboolean
 mono_gc_is_gc_thread (void)
 {
@@ -116,7 +106,7 @@ mono_gc_weak_link_add (void **link_addr, MonoObject *obj, gboolean track)
 }
 
 void
-mono_gc_weak_link_remove (void **link_addr)
+mono_gc_weak_link_remove (void **link_addr, gboolean track)
 {
 	*link_addr = NULL;
 }

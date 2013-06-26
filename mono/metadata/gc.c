@@ -101,7 +101,6 @@ mono_gc_run_finalize (void *obj, void *data)
 	MonoDomain *caller_domain = mono_domain_get ();
 	MonoDomain *domain;
 	RuntimeInvokeFunction runtime_invoke;
-	GSList *l, *refs = NULL;
 
 	o = (MonoObject*)((char*)obj + GPOINTER_TO_UINT (data));
 
@@ -115,8 +114,6 @@ mono_gc_run_finalize (void *obj, void *data)
 
 	o2 = g_hash_table_lookup (domain->finalizable_objects_hash, o);
 
-	refs = mono_gc_remove_weak_track_object (domain, o);
-
 	mono_domain_finalizers_unlock (domain);
 
 	if (!o2)
@@ -124,23 +121,6 @@ mono_gc_run_finalize (void *obj, void *data)
 		return;
 #endif
 
-	if (refs) {
-		/*
-		 * Support for GCHandles of type WeakTrackResurrection:
-		 *
-		 *   Its not exactly clear how these are supposed to work, or how their
-		 * semantics can be implemented. We only implement one crucial thing:
-		 * these handles are only cleared after the finalizer has ran.
-		 */
-		for (l = refs; l; l = l->next) {
-			guint32 gchandle = GPOINTER_TO_UINT (l->data);
-
-			mono_gchandle_set_target (gchandle, o);
-		}
-
-		g_slist_free (refs);
-	}
-		
 	/* make sure the finalizer is not called again if the object is resurrected */
 	object_register_finalizer (obj, NULL);
 
@@ -619,6 +599,16 @@ find_first_unset (guint32 bitmap)
 	return -1;
 }
 
+static void*
+make_root_descr_all_refs (int numbits, gboolean pinned)
+{
+#ifdef HAVE_SGEN_GC
+	if (pinned)
+		return NULL;
+#endif
+	return mono_gc_make_root_descr_all_refs (numbits);
+}
+
 static guint32
 alloc_handle (HandleData *handles, MonoObject *obj, gboolean track)
 {
@@ -628,7 +618,7 @@ alloc_handle (HandleData *handles, MonoObject *obj, gboolean track)
 	if (!handles->size) {
 		handles->size = 32;
 		if (handles->type > HANDLE_WEAK_TRACK) {
-			handles->entries = mono_gc_alloc_fixed (sizeof (gpointer) * handles->size, mono_gc_make_root_descr_all_refs (handles->size));
+			handles->entries = mono_gc_alloc_fixed (sizeof (gpointer) * handles->size, make_root_descr_all_refs (handles->size, handles->type == HANDLE_PINNED));
 		} else {
 			handles->entries = g_malloc0 (sizeof (gpointer) * handles->size);
 			handles->domain_ids = g_malloc0 (sizeof (guint16) * handles->size);
@@ -666,8 +656,8 @@ alloc_handle (HandleData *handles, MonoObject *obj, gboolean track)
 		if (handles->type > HANDLE_WEAK_TRACK) {
 			gpointer *entries;
 
-			entries = mono_gc_alloc_fixed (sizeof (gpointer) * new_size, mono_gc_make_root_descr_all_refs (new_size));
-			memcpy (entries, handles->entries, sizeof (gpointer) * handles->size);
+			entries = mono_gc_alloc_fixed (sizeof (gpointer) * new_size, make_root_descr_all_refs (new_size, handles->type == HANDLE_PINNED));
+			mono_gc_memmove (entries, handles->entries, sizeof (gpointer) * handles->size);
 
 			mono_gc_free_fixed (handles->entries);
 			handles->entries = entries;
@@ -675,26 +665,21 @@ alloc_handle (HandleData *handles, MonoObject *obj, gboolean track)
 			gpointer *entries;
 			guint16 *domain_ids;
 			domain_ids = g_malloc0 (sizeof (guint16) * new_size);
-			entries = g_malloc (sizeof (gpointer) * new_size);
-			/* we disable GC because we could lose some disappearing link updates */
-			mono_gc_disable ();
-			memcpy (entries, handles->entries, sizeof (gpointer) * handles->size);
-			memset (entries + handles->size, 0, sizeof (gpointer) * handles->size);
+			entries = g_malloc0 (sizeof (gpointer) * new_size);
 			memcpy (domain_ids, handles->domain_ids, sizeof (guint16) * handles->size);
 			for (i = 0; i < handles->size; ++i) {
 				MonoObject *obj = mono_gc_weak_link_get (&(handles->entries [i]));
-				if (handles->entries [i])
-					mono_gc_weak_link_remove (&(handles->entries [i]));
-				/*g_print ("reg/unreg entry %d of type %d at %p to object %p (%p), was: %p\n", i, handles->type, &(entries [i]), obj, entries [i], handles->entries [i]);*/
 				if (obj) {
 					mono_gc_weak_link_add (&(entries [i]), obj, track);
+					mono_gc_weak_link_remove (&(handles->entries [i]), track);
+				} else {
+					g_assert (!handles->entries [i]);
 				}
 			}
 			g_free (handles->entries);
 			g_free (handles->domain_ids);
 			handles->entries = entries;
 			handles->domain_ids = domain_ids;
-			mono_gc_enable ();
 		}
 
 		/* set i and slot to the next free position */
@@ -768,11 +753,6 @@ mono_gchandle_new_weakref (MonoObject *obj, gboolean track_resurrection)
 {
 	guint32 handle = alloc_handle (&gc_handles [track_resurrection? HANDLE_WEAK_TRACK: HANDLE_WEAK], obj, track_resurrection);
 
-#ifndef HAVE_SGEN_GC
-	if (track_resurrection)
-		mono_gc_add_weak_track_handle (obj, handle);
-#endif
-
 	return handle;
 }
 
@@ -833,7 +813,7 @@ mono_gchandle_set_target (guint32 gchandle, MonoObject *obj)
 		if (handles->type <= HANDLE_WEAK_TRACK) {
 			old_obj = handles->entries [slot];
 			if (handles->entries [slot])
-				mono_gc_weak_link_remove (&handles->entries [slot]);
+				mono_gc_weak_link_remove (&handles->entries [slot], handles->type == HANDLE_WEAK_TRACK);
 			if (obj)
 				mono_gc_weak_link_add (&handles->entries [slot], obj, handles->type == HANDLE_WEAK_TRACK);
 			/*FIXME, what to use when obj == null?*/
@@ -846,11 +826,6 @@ mono_gchandle_set_target (guint32 gchandle, MonoObject *obj)
 	}
 	/*g_print ("changed entry %d of type %d to object %p (in slot: %p)\n", slot, handles->type, obj, handles->entries [slot]);*/
 	unlock_handles (handles);
-
-#ifndef HAVE_SGEN_GC
-	if (type == HANDLE_WEAK_TRACK)
-		mono_gc_change_weak_track_handle (old_obj, obj, gchandle);
-#endif
 }
 
 /**
@@ -904,16 +879,12 @@ mono_gchandle_free (guint32 gchandle)
 	HandleData *handles = &gc_handles [type];
 	if (type > 3)
 		return;
-#ifndef HAVE_SGEN_GC
-	if (type == HANDLE_WEAK_TRACK)
-		mono_gc_remove_weak_track_handle (gchandle);
-#endif
 
 	lock_handles (handles);
 	if (slot < handles->size && (handles->bitmap [slot / 32] & (1 << (slot % 32)))) {
 		if (handles->type <= HANDLE_WEAK_TRACK) {
 			if (handles->entries [slot])
-				mono_gc_weak_link_remove (&handles->entries [slot]);
+				mono_gc_weak_link_remove (&handles->entries [slot], handles->type == HANDLE_WEAK_TRACK);
 		} else {
 			handles->entries [slot] = NULL;
 		}
@@ -950,7 +921,7 @@ mono_gchandle_free_domain (MonoDomain *domain)
 				if (domain->domain_id == handles->domain_ids [slot]) {
 					handles->bitmap [slot / 32] &= ~(1 << (slot % 32));
 					if (handles->entries [slot])
-						mono_gc_weak_link_remove (&handles->entries [slot]);
+						mono_gc_weak_link_remove (&handles->entries [slot], handles->type == HANDLE_WEAK_TRACK);
 				}
 			} else {
 				if (handles->entries [slot] && mono_object_domain (handles->entries [slot]) == domain) {
@@ -1141,7 +1112,7 @@ mono_gc_init (void)
 	MONO_SEM_INIT (&finalizer_sem, 0);
 #endif
 
-	gc_thread = mono_thread_create_internal (mono_domain_get (), finalizer_thread, NULL, FALSE, 0);
+	gc_thread = mono_thread_create_internal (mono_domain_get (), finalizer_thread, NULL, FALSE, TRUE, 0);
 	ves_icall_System_Threading_Thread_SetName_internal (gc_thread, mono_string_new (mono_domain_get (), "Finalizer"));
 }
 
@@ -1186,6 +1157,21 @@ mono_gc_cleanup (void)
 					Sleep (100);
 				}
 
+			} else {
+				int ret;
+
+                                /* Wait for the thread to actually exit */
+                                ret = WaitForSingleObjectEx (gc_thread->handle, INFINITE, TRUE);
+                                g_assert (ret == WAIT_OBJECT_0);
+
+#ifndef HOST_WIN32
+                               /*
+                                * The above wait only waits for the exited event to be signalled, the thread might still be running. To fix this race, we
+                                * create the finalizer thread without calling pthread_detach () on it, so we can wait for it manually.
+                                */
+                               ret = pthread_join ((gpointer)(gsize)gc_thread->tid, NULL);
+                               g_assert (ret == 0);
+#endif
 			}
 		}
 		gc_thread = NULL;
@@ -1351,7 +1337,7 @@ reference_queue_proccess (MonoReferenceQueue *queue)
 	while ((entry = *iter)) {
 #ifdef HAVE_SGEN_GC
 		if (queue->should_be_deleted || !mono_gc_weak_link_get (&entry->dis_link)) {
-			mono_gc_weak_link_remove (&entry->dis_link);
+			mono_gc_weak_link_remove (&entry->dis_link, TRUE);
 #else
 		if (queue->should_be_deleted || !mono_gchandle_get_target (entry->gchandle)) {
 			mono_gchandle_free ((guint32)entry->gchandle);
@@ -1410,13 +1396,10 @@ reference_queue_clear_for_domain (MonoDomain *domain)
 		RefQueueEntry *entry;
 		while ((entry = *iter)) {
 			MonoObject *obj;
+			if (entry->domain == domain) {
 #ifdef HAVE_SGEN_GC
-			obj = mono_gc_weak_link_get (&entry->dis_link);
-			if (obj && mono_object_domain (obj) == domain) {
-				mono_gc_weak_link_remove (&entry->dis_link);
+				mono_gc_weak_link_remove (&entry->dis_link, TRUE);
 #else
-			obj = mono_gchandle_get_target (entry->gchandle);
-			if (obj && mono_object_domain (obj) == domain) {
 				mono_gchandle_free ((guint32)entry->gchandle);
 #endif
 				ref_list_remove_element (iter, entry);
@@ -1472,6 +1455,7 @@ mono_gc_reference_queue_add (MonoReferenceQueue *queue, MonoObject *obj, void *u
 
 	entry = g_new0 (RefQueueEntry, 1);
 	entry->user_data = user_data;
+	entry->domain = mono_object_domain (obj);
 
 #ifdef HAVE_SGEN_GC
 	mono_gc_weak_link_add (&entry->dis_link, obj, TRUE);

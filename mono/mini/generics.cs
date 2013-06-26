@@ -308,6 +308,16 @@ class Tests {
 		public GenericClass<int> class_field;
 	}
 
+	public class MRO<T> : MarshalByRefObject {
+		public T gen_field;
+
+		public T stfld_ldfld (T t) {
+			var m = this;
+			m.gen_field = t;
+			return m.gen_field;
+		}
+	}
+
 	public static int test_0_ldfld_stfld_mro () {
 		MRO m = new MRO ();
 		GenericStruct<int> s = new GenericStruct<int> (5);
@@ -329,6 +339,11 @@ class Tests {
 		m.class_field = new GenericClass<int> (5);
 		if (m.class_field.t != 5)
 			return 4;
+
+		// gshared
+		var m2 = new MRO<string> ();
+		if (m2.stfld_ldfld ("A") != "A")
+			return 5;
 
 		return 0;
 	}
@@ -919,6 +934,25 @@ class Tests {
 		foreach(DocType cat in categories) {
 			List<Doc> catDocs = documents.Where(d => d.Type == cat).OrderBy(d => d.Name).ToList<Doc>();
 		}
+		return 0;
+	}
+
+	public interface IFoo2 {
+		void MoveNext ();
+	}
+
+	public struct Foo2 : IFoo2 {
+		public void MoveNext () {
+		}
+	}
+
+	public static Action Dingus (ref Foo2 f) {
+		return new Action (f.MoveNext);
+	}
+
+	public static int test_0_delegate_unbox_full_aot () {
+		Foo2 foo = new Foo2 ();
+		Dingus (ref foo) ();
 		return 0;
 	}
 }

@@ -85,11 +85,6 @@
 #undef AF_INET6
 #endif
 
-#ifdef PLATFORM_ANDROID
-// not yet actually implemented...
-#undef AF_INET6
-#endif
-
 #define LOGDEBUG(...)  
 /* define LOGDEBUG(...) g_message(__VA_ARGS__)  */
 
@@ -927,20 +922,11 @@ static MonoObject *create_object_from_sockaddr(struct sockaddr *saddr,
 		g_assert (domain->sockaddr_data_field);
 	}
 
-	/* Make sure there is space for the family and size bytes */
-#ifdef HAVE_SYS_UN_H
-	if (saddr->sa_family == AF_UNIX) {
-		/* sa_len includes the entire sockaddr size, so we don't need the
-		 * N bytes (sizeof (unsigned short)) of the family. */
-		data=mono_array_new_cached(domain, mono_get_byte_class (), sa_size);
-	} else
-#endif
-	{
-		/* May be the +2 here is too conservative, as sa_len returns
-		 * the length of the entire sockaddr_in/in6, including
-		 * sizeof (unsigned short) of the family */
-		data=mono_array_new_cached(domain, mono_get_byte_class (), sa_size+2);
-	}
+	/* May be the +2 here is too conservative, as sa_len returns
+	 * the length of the entire sockaddr_in/in6, including
+	 * sizeof (unsigned short) of the family */
+	/* We can't really avoid the +2 as all code below depends on this size - INCLUDING unix domain sockets.*/
+	data=mono_array_new_cached(domain, mono_get_byte_class (), sa_size+2);
 
 	/* The data buffer is laid out as follows:
 	 * bytes 0 and 1 are the address family
@@ -3157,5 +3143,15 @@ void mono_network_cleanup(void)
 	WSACleanup();
 }
 
+void
+icall_cancel_blocking_socket_operation (MonoThread *thread)
+{
+#if !defined(HOST_WIN32) && !defined(__MACH__)
+	MonoInternalThread *internal = thread->internal_thread;
+
+	internal->ignore_next_signal = TRUE;
+	mono_thread_kill (internal, mono_thread_get_abort_signal ());		
+#endif
+}
 
 #endif /* #ifndef DISABLE_SOCKETS */

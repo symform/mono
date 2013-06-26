@@ -250,8 +250,14 @@ enum {
  */
 
 static int gc_initialized = 0;
+/* If set, check if we need to do something every X allocations */
+static gboolean has_per_allocation_action;
+/* If set, do a heap check every X allocation */
+static guint32 verify_before_allocs = 0;
 /* If set, do a minor collection before every X allocation */
 static guint32 collect_before_allocs = 0;
+/* If set, do a whole heap check before each collection */
+static gboolean whole_heap_check_before_collection = FALSE;
 /* If set, do a heap consistency check before each minor collection */
 static gboolean consistency_check_at_minor_collection = FALSE;
 /* If set, check that there are no references to the domain left at domain unload */
@@ -481,7 +487,6 @@ mono_sgen_safe_name (void* obj)
  * ######################################################################
  */
 static LOCK_DECLARE (gc_mutex);
-static int gc_disabled = 0;
 static int num_minor_gcs = 0;
 static int num_major_gcs = 0;
 
@@ -906,6 +911,8 @@ static void check_major_refs (void);
 static void check_scan_starts (void);
 static void check_for_xdomain_refs (void);
 static void dump_heap (const char *type, int num, const char *reason);
+static void verify_whole_heap (void);
+static void whole_heap_check (void);
 
 void mono_gc_scan_for_specific_ref (MonoObject *key);
 
@@ -1049,7 +1056,7 @@ mono_gc_make_descr_for_object (gsize *bitmap, int numbits, size_t obj_size)
 			return (void*) desc;
 		}
 		/* we know the 2-word header is ptr-free */
-		if (last_set < SMALL_BITMAP_SIZE + OBJECT_HEADER_WORDS) {
+		if (last_set < SMALL_BITMAP_SIZE + OBJECT_HEADER_WORDS && stored_size < (1 << SMALL_BITMAP_SHIFT)) {
 			desc = DESC_TYPE_SMALL_BITMAP | (stored_size << 1) | ((*bitmap >> OBJECT_HEADER_WORDS) << SMALL_BITMAP_SHIFT);
 			DEBUG (6, fprintf (gc_debug_file, "Smallbitmap descriptor %p, size: %zd, last set: %d\n", (void*)desc, stored_size, last_set));
 			return (void*) desc;
@@ -1094,7 +1101,7 @@ mono_gc_make_descr_for_array (int vector, gsize *elem_bitmap, int numbits, size_
 		}
 		/* FIXME: try run-len first */
 		/* Note: we can't skip the object header here, because it's not present */
-		if (last_set <= SMALL_BITMAP_SIZE) {
+		if (last_set < SMALL_BITMAP_SIZE) {
 			return (void*)(desc | VECTOR_SUBTYPE_BITMAP | (*elem_bitmap << 16));
 		}
 	}
@@ -3005,6 +3012,14 @@ reset_minor_collection_allowance (void)
 	need_calculate_minor_collection_allowance = TRUE;
 }
 
+static mword
+double_to_mword_with_saturation (double value)
+{
+	if (value >= (double)MWORD_MAX_VALUE)
+		return MWORD_MAX_VALUE;
+	return (mword)value;
+}
+
 static void
 try_calculate_minor_collection_allowance (gboolean overwrite)
 {
@@ -3054,7 +3069,7 @@ try_calculate_minor_collection_allowance (gboolean overwrite)
 	 *
 	 * hence:
 	 */
-	allowance_target = (mword)((double)save_target * (double)(minor_collection_sections_alloced * major_collector.section_size + last_collection_los_memory_alloced) / (double)(num_major_sections_saved * major_collector.section_size + los_memory_saved));
+	allowance_target = double_to_mword_with_saturation ((double)save_target * (double)(minor_collection_sections_alloced * major_collector.section_size + last_collection_los_memory_alloced) / (double)(num_major_sections_saved * major_collector.section_size + los_memory_saved));
 
 	minor_collection_allowance = MAX (MIN (allowance_target, num_major_sections * major_collector.section_size + los_memory_usage), MIN_MINOR_COLLECTION_ALLOWANCE);
 
@@ -3171,6 +3186,8 @@ collect_nursery (size_t requested_size)
 	DEBUG (2, fprintf (gc_debug_file, "Finding pinned pointers: %d in %d usecs\n", next_pin_slot, TV_ELAPSED (btv, atv)));
 	DEBUG (4, fprintf (gc_debug_file, "Start scan with %d pinned objects\n", next_pin_slot));
 
+	if (whole_heap_check_before_collection)
+		whole_heap_check ();
 	if (consistency_check_at_minor_collection)
 		check_consistency ();
 
@@ -3319,6 +3336,9 @@ major_do_collection (const char *reason)
 
 	/* Pinning depends on this */
 	clear_nursery_fragments (nursery_next);
+
+	if (whole_heap_check_before_collection)
+		whole_heap_check ();
 
 	TV_GETTIME (btv);
 	time_major_pre_collection_fragment_clear += TV_ELAPSED_MS (atv, btv);
@@ -3794,20 +3814,25 @@ mono_gc_alloc_obj_nolock (MonoVTable *vtable, size_t size)
 
 	g_assert (vtable->gc_descr);
 
-	if (G_UNLIKELY (collect_before_allocs)) {
+	if (G_UNLIKELY (has_per_allocation_action)) {
 		static int alloc_count;
+		int current_alloc = InterlockedIncrement (&alloc_count);
 
-		InterlockedIncrement (&alloc_count);
-		if (((alloc_count % collect_before_allocs) == 0) && nursery_section) {
-			mono_profiler_gc_event (MONO_GC_EVENT_START, 0);
-			stop_world (0);
-			collect_nursery (0);
-			restart_world (0);
-			mono_profiler_gc_event (MONO_GC_EVENT_END, 0);
-			if (!degraded_mode && !search_fragment_for_size (size) && size <= MAX_SMALL_OBJ_SIZE) {
-				// FIXME:
-				g_assert_not_reached ();
+		if (collect_before_allocs) {
+			if (((current_alloc % collect_before_allocs) == 0) && nursery_section) {
+				mono_profiler_gc_event (MONO_GC_EVENT_START, 0);
+				stop_world (0);
+				collect_nursery (0);
+				restart_world (0);
+				mono_profiler_gc_event (MONO_GC_EVENT_END, 0);
+				if (!degraded_mode && !search_fragment_for_size (size) && size <= MAX_SMALL_OBJ_SIZE) {
+					// FIXME:
+					g_assert_not_reached ();
+				}
 			}
+		} else if (verify_before_allocs) {
+			if ((current_alloc % verify_before_allocs) == 0)
+				verify_whole_heap ();
 		}
 	}
 
@@ -4619,7 +4644,7 @@ null_link_in_range (CopyOrMarkObjectFunc copy_func, char *start, char *end, int 
 			 * a finalizer or the finalizer has already run,
 			 * so we must null a tracking reference.
 			 */
-			if (track == before_finalization) {
+			if (!*entry->link || track == before_finalization) {
 				prev = entry;
 				entry = entry->next;
 				continue;
@@ -4632,6 +4657,7 @@ null_link_in_range (CopyOrMarkObjectFunc copy_func, char *start, char *end, int 
 					void **p = entry->link;
 					DisappearingLink *old;
 					*p = NULL;
+					binary_protocol_dislink_update (p, NULL, 0);
 					/* remove from list */
 					if (prev)
 						prev->next = entry->next;
@@ -4676,6 +4702,7 @@ null_link_in_range (CopyOrMarkObjectFunc copy_func, char *start, char *end, int 
 						continue;
 					} else {
 						*entry->link = HIDE_POINTER (copy, track);
+						binary_protocol_dislink_update (entry->link, copy, track);
 						DEBUG (5, fprintf (gc_debug_file, "Updated dislink at %p to %p\n", entry->link, DISLINK_OBJECT (entry)));
 					}
 				}
@@ -4699,7 +4726,7 @@ null_links_for_domain (MonoDomain *domain, int generation)
 		prev = NULL;
 		for (entry = disappearing_link_hash [i]; entry; ) {
 			char *object = DISLINK_OBJECT (entry);
-			if (object && !((MonoObject*)object)->vtable) {
+			if (*entry->link && object && !((MonoObject*)object)->vtable) {
 				DisappearingLink *next = entry->next;
 
 				if (prev)
@@ -4945,6 +4972,7 @@ add_or_remove_disappearing_link (MonoObject *obj, void **link, gboolean track, i
 			} else {
 				*link = HIDE_POINTER (obj, track); /* we allow the change of object */
 			}
+			binary_protocol_dislink_update (link, obj, track);
 			return;
 		}
 		prev = entry;
@@ -4957,6 +4985,7 @@ add_or_remove_disappearing_link (MonoObject *obj, void **link, gboolean track, i
 	entry->next = disappearing_link_hash [hash];
 	disappearing_link_hash [hash] = entry;
 	hash_table->num_links++;
+	binary_protocol_dislink_update (link, obj, track);
 	DEBUG (5, fprintf (gc_debug_file, "Added dislink %p for object: %p (%s) at %p to %s table\n", entry, obj, obj->vtable->klass->name, link, generation_name (generation)));
 }
 
@@ -6963,9 +6992,7 @@ check_consistency (void)
 
 	DEBUG (1, fprintf (gc_debug_file, "Heap consistency check done.\n"));
 
-#ifdef SGEN_BINARY_PROTOCOL
-	if (!binary_protocol_file)
-#endif
+	if (!binary_protocol_is_enabled ())
 		g_assert (!missing_remsets);
 }
 
@@ -6990,6 +7017,178 @@ check_major_refs (void)
 	mono_sgen_los_iterate_objects ((IterateObjectCallbackFunc)check_major_refs_callback, NULL);
 }
 
+static char **valid_nursery_objects;
+static int valid_nursery_object_count;
+static gboolean broken_heap;
+
+static void 
+setup_mono_sgen_scan_area_with_callback (char *object, size_t size, void *data)
+{
+	valid_nursery_objects [valid_nursery_object_count++] = object;
+}
+
+static int
+compare_pointers (const void *a, const void *b) {
+	if (a == b)
+		return 0;
+	if (a < b)
+		return -1;
+	return 1;
+}
+
+static gboolean
+find_object_in_nursery_dump (char *object)
+{
+	int first = 0, last = valid_nursery_object_count;
+	while (first < last) {
+		int middle = first + ((last - first) >> 1);
+		if (object == valid_nursery_objects [middle])
+			return TRUE;
+
+		if (object < valid_nursery_objects [middle])
+			last = middle;
+		else
+			first = middle + 1;
+	}
+	g_assert (first == last);
+	return FALSE;
+}
+
+static void
+describe_nursery_ptr (char *ptr)
+{
+	int i;
+
+	fprintf (gc_debug_file, "nursery-ptr ");
+	for (i = 0; i < valid_nursery_object_count; ++i) {
+		if (valid_nursery_objects [i] >= ptr)
+			break;
+	}
+
+	if (i >= valid_nursery_object_count || valid_nursery_objects [i] + safe_object_get_size (valid_nursery_objects [i]) < ptr) {
+		fprintf (gc_debug_file, "(unalloc'd-memory)");
+	} else {
+		char *obj = valid_nursery_objects [i];
+		MonoVTable *vtable = (MonoVTable*)LOAD_VTABLE (obj);
+		int size = safe_object_get_size (obj);
+
+		if (obj == ptr)
+			fprintf (gc_debug_file, "(object %s.%s size %d)", 
+				vtable->klass->name_space, vtable->klass->name, size);
+		else
+			fprintf (gc_debug_file, "(interior-ptr offset %td of %p (%s.%s) size %d)",
+				ptr - obj, obj,
+				vtable->klass->name_space, vtable->klass->name, size);
+	}
+}
+
+static gboolean
+is_valid_object_pointer (char *object)
+{
+	if (ptr_in_nursery (object))
+		return find_object_in_nursery_dump (object);
+	
+	if (major_collector.is_valid_object (object))
+		return TRUE;
+
+	if (mono_sgen_los_is_valid_object (object))
+		return TRUE;
+
+	return FALSE;
+}
+
+static void
+describe_pointer (char *ptr)
+{
+	if (ptr_in_nursery (ptr)) {
+		describe_nursery_ptr (ptr);
+	} else if (major_collector.describe_pointer (ptr)) {
+		//Nothing really
+	} else if (!mono_sgen_los_describe_pointer (ptr)) {
+		fprintf (gc_debug_file, "non-heap-ptr");
+	}
+}
+
+static void
+bad_pointer_spew (char *obj, char **slot)
+{
+	char *ptr = *slot;
+	MonoVTable *vtable = (MonoVTable*)LOAD_VTABLE (obj);
+
+	fprintf (gc_debug_file, "Invalid object pointer %p [", ptr);
+	describe_pointer (ptr);
+	fprintf (gc_debug_file, "] at offset %td in object %p (%s.%s).\n",
+		(char*)slot - obj,
+		obj, vtable->klass->name_space, vtable->klass->name);
+	broken_heap = TRUE;
+}
+
+static void
+missing_remset_spew (char *obj, char **slot)
+{
+	char *ptr = *slot;
+	MonoVTable *vtable = (MonoVTable*)LOAD_VTABLE (obj);
+
+    fprintf (gc_debug_file,  "Oldspace->newspace reference %p at offset %td in object %p (%s.%s) not found in remsets.\n",
+ 		ptr, (char*)slot - obj, obj, 
+		vtable->klass->name_space, vtable->klass->name);
+
+	broken_heap = TRUE;
+}
+
+/*
+FIXME Flag missing remsets due to pinning as non fatal
+*/
+#undef HANDLE_PTR
+#define HANDLE_PTR(ptr,obj)	do {	\
+		if (*(char**)ptr) {	\
+			if (!is_valid_object_pointer (*(char**)ptr)) {	\
+				bad_pointer_spew ((char*)obj, (char**)ptr);	\
+			} else if (!ptr_in_nursery (obj) && ptr_in_nursery ((char*)*ptr)) {	\
+				if (!find_in_remsets ((char*)(ptr)) && (!use_cardtable || !sgen_card_table_address_is_marked ((mword)ptr))) \
+					missing_remset_spew ((char*)obj, (char**)ptr);	\
+			}	\
+        } \
+	} while (0)
+
+
+static void
+verify_object_pointers_callback (char *start, size_t size, void *dummy)
+{
+#define SCAN_OBJECT_ACTION
+#include "sgen-scan-object.h"
+}
+
+static void
+whole_heap_check (void)
+{
+	/*setup valid_nursery_objects*/
+	if (!valid_nursery_objects)
+		valid_nursery_objects = mono_sgen_alloc_os_memory (DEFAULT_NURSERY_SIZE, TRUE);
+	valid_nursery_object_count = 0;
+	mono_sgen_scan_area_with_callback (nursery_section->data, nursery_section->end_data, setup_mono_sgen_scan_area_with_callback, NULL, FALSE);
+
+	broken_heap = FALSE;
+	mono_sgen_scan_area_with_callback (nursery_section->data, nursery_section->end_data, verify_object_pointers_callback, NULL, FALSE);
+	major_collector.iterate_objects (TRUE, TRUE, verify_object_pointers_callback, NULL);
+	mono_sgen_los_iterate_objects (verify_object_pointers_callback, NULL);	
+
+	g_assert (!broken_heap);
+}
+/*
+FIXME:
+-This heap checker is racy regarding inlined write barriers and other JIT tricks that
+depend on OP_DUMMY_USE.
+*/
+static void
+verify_whole_heap (void)
+{
+	stop_world (0);
+	clear_nursery_fragments (nursery_next);
+	whole_heap_check ();
+	restart_world (0);
+}
+
 /* Check that the reference is valid */
 #undef HANDLE_PTR
 #define HANDLE_PTR(ptr,obj)	do {	\
@@ -7012,6 +7211,7 @@ check_object (char *start)
 
 #include "sgen-scan-object.h"
 }
+
 
 /*
  * ######################################################################
@@ -7148,22 +7348,6 @@ mono_gc_get_heap_size (void)
 	return total_alloc;
 }
 
-void
-mono_gc_disable (void)
-{
-	LOCK_GC;
-	gc_disabled++;
-	UNLOCK_GC;
-}
-
-void
-mono_gc_enable (void)
-{
-	LOCK_GC;
-	gc_disabled--;
-	UNLOCK_GC;
-}
-
 int
 mono_gc_get_los_limit (void)
 {
@@ -7198,19 +7382,43 @@ mono_gc_weak_link_add (void **link_addr, MonoObject *obj, gboolean track)
 }
 
 void
-mono_gc_weak_link_remove (void **link_addr)
+mono_gc_weak_link_remove (void **link_addr, gboolean track)
 {
 	LOCK_GC;
-	mono_gc_register_disappearing_link (NULL, link_addr, FALSE);
+	mono_gc_register_disappearing_link (NULL, link_addr, track);
 	UNLOCK_GC;
 }
 
 MonoObject*
 mono_gc_weak_link_get (void **link_addr)
 {
-	if (!*link_addr)
-		return NULL;
-	return (MonoObject*) REVEAL_POINTER (*link_addr);
+	void * volatile *link_addr_volatile;
+	void *ptr;
+	MonoObject *obj;
+ retry:
+	link_addr_volatile = link_addr;
+	ptr = (void*)*link_addr_volatile;
+	/*
+	 * At this point we have a hidden pointer.  If the GC runs
+	 * here, it will not recognize the hidden pointer as a
+	 * reference, and if the object behind it is not referenced
+	 * elsewhere, it will be freed.  Once the world is restarted
+	 * we reveal the pointer, giving us a pointer to a freed
+	 * object.  To make sure we don't return it, we load the
+	 * hidden pointer again.  If it's still the same, we can be
+	 * sure the object reference is valid.
+	 */
+	if (ptr)
+		obj = (MonoObject*) REVEAL_POINTER (ptr);
+	else
+		obj = NULL;
+
+	mono_memory_barrier ();
+
+	if ((void*)*link_addr_volatile != ptr)
+		goto retry;
+
+	return obj;
 }
 
 gboolean
@@ -7529,11 +7737,22 @@ mono_gc_base_init (void)
 				}
 			} else if (!strcmp (opt, "print-allowance")) {
 				debug_print_allowance = TRUE;
+			} else if (!strcmp (opt, "verify-before-allocs")) {
+				verify_before_allocs = 1;
+				has_per_allocation_action = TRUE;
+			} else if (g_str_has_prefix (opt, "verify-before-allocs=")) {
+				char *arg = strchr (opt, '=') + 1;
+				verify_before_allocs = atoi (arg);
+				has_per_allocation_action = TRUE;
 			} else if (!strcmp (opt, "collect-before-allocs")) {
 				collect_before_allocs = 1;
+				has_per_allocation_action = TRUE;
 			} else if (g_str_has_prefix (opt, "collect-before-allocs=")) {
 				char *arg = strchr (opt, '=') + 1;
+				has_per_allocation_action = TRUE;
 				collect_before_allocs = atoi (arg);
+			} else if (!strcmp (opt, "verify-before-collections")) {
+				whole_heap_check_before_collection = TRUE;
 			} else if (!strcmp (opt, "check-at-minor-collections")) {
 				consistency_check_at_minor_collection = TRUE;
 				nursery_clear_policy = CLEAR_AT_GC;
@@ -7558,14 +7777,16 @@ mono_gc_base_init (void)
 #ifdef SGEN_BINARY_PROTOCOL
 			} else if (g_str_has_prefix (opt, "binary-protocol=")) {
 				char *filename = strchr (opt, '=') + 1;
-				binary_protocol_file = fopen (filename, "w");
+				binary_protocol_init (filename);
 #endif
 			} else {
 				fprintf (stderr, "Invalid format for the MONO_GC_DEBUG env variable: '%s'\n", env);
 				fprintf (stderr, "The format is: MONO_GC_DEBUG=[l[:filename]|<option>]+ where l is a debug level 0-9.\n");
 				fprintf (stderr, "Valid options are:\n");
 				fprintf (stderr, "  collect-before-allocs[=<n>]\n");
+				fprintf (stderr, "  verify-before-allocs[=<n>]\n");
 				fprintf (stderr, "  check-at-minor-collections\n");
+				fprintf (stderr, "  verify-before-collections\n");
 				fprintf (stderr, "  disable-minor\n");
 				fprintf (stderr, "  disable-major\n");
 				fprintf (stderr, "  xdomain-checks\n");
@@ -7944,7 +8165,7 @@ mono_gc_get_managed_allocator (MonoVTable *vtable, gboolean for_box)
 		return NULL;
 	if (klass->byval_arg.type == MONO_TYPE_STRING)
 		return NULL;
-	if (collect_before_allocs)
+	if (has_per_allocation_action)
 		return NULL;
 
 	if (ALIGN_TO (klass->instance_size, ALLOC_ALIGN) < MAX_SMALL_OBJ_SIZE)

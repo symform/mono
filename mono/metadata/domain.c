@@ -502,6 +502,11 @@ jit_info_table_realloc (MonoJitInfoTable *old)
 	/* number of needed places for elements needed */
 	required_size = (int)((long)num_elements * JIT_INFO_TABLE_FILL_RATIO_DENOM / JIT_INFO_TABLE_FILL_RATIO_NOM);
 	num_chunks = (required_size + MONO_JIT_INFO_TABLE_CHUNK_SIZE - 1) / MONO_JIT_INFO_TABLE_CHUNK_SIZE;
+	if (num_chunks == 0) {
+		g_assert (num_elements == 0);
+		return jit_info_table_new (old->domain);
+	}
+	g_assert (num_chunks > 0);
 
 	new = g_malloc (MONO_SIZEOF_JIT_INFO_TABLE + sizeof (MonoJitInfoTableChunk*) * num_chunks);
 	new->domain = old->domain;
@@ -1235,7 +1240,6 @@ mono_domain_create (void)
 	domain->jit_info_table = jit_info_table_new (domain);
 	domain->jit_info_free_queue = NULL;
 	domain->finalizable_objects_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
-	domain->track_resurrection_handles_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 
 	InitializeCriticalSection (&domain->lock);
 	InitializeCriticalSection (&domain->assemblies_lock);
@@ -2072,12 +2076,6 @@ mono_domain_free (MonoDomain *domain, gboolean force)
 
 	g_hash_table_destroy (domain->finalizable_objects_hash);
 	domain->finalizable_objects_hash = NULL;
-	if (domain->track_resurrection_objects_hash) {
-		g_hash_table_foreach (domain->track_resurrection_objects_hash, free_slist, NULL);
-		g_hash_table_destroy (domain->track_resurrection_objects_hash);
-	}
-	if (domain->track_resurrection_handles_hash)
-		g_hash_table_destroy (domain->track_resurrection_handles_hash);
 	if (domain->method_rgctx_hash) {
 		g_hash_table_destroy (domain->method_rgctx_hash);
 		domain->method_rgctx_hash = NULL;

@@ -22,6 +22,8 @@
  * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "sgen-gc.h"
+
 #ifdef SGEN_BINARY_PROTOCOL
 
 enum {
@@ -40,7 +42,8 @@ enum {
 	SGEN_PROTOCOL_THREAD_UNREGISTER,
 	SGEN_PROTOCOL_MISSING_REMSET,
 	SGEN_PROTOCOL_ALLOC_PINNED,
-	SGEN_PROTOCOL_ALLOC_DEGRADED
+	SGEN_PROTOCOL_ALLOC_DEGRADED,
+	SGEN_PROTOCOL_DISLINK_UPDATE
 };
 
 typedef struct {
@@ -124,7 +127,18 @@ typedef struct {
 	int value_pinned;
 } SGenProtocolMissingRemset;
 
+typedef struct {
+	gpointer link;
+	gpointer obj;
+	int track;
+} SGenProtocolDislinkUpdate;
+
 /* missing: finalizers, dislinks, roots, non-store wbarriers */
+
+void binary_protocol_init (const char *filename) MONO_INTERNAL;
+gboolean binary_protocol_is_enabled (void) MONO_INTERNAL;
+
+void binary_protocol_flush_buffers (gboolean force) MONO_INTERNAL;
 
 void binary_protocol_collection (int generation) MONO_INTERNAL;
 void binary_protocol_alloc (gpointer obj, gpointer vtable, int size) MONO_INTERNAL;
@@ -143,8 +157,11 @@ void binary_protocol_thread_register (gpointer thread) MONO_INTERNAL;
 void binary_protocol_thread_unregister (gpointer thread) MONO_INTERNAL;
 void binary_protocol_missing_remset (gpointer obj, gpointer obj_vtable, int offset,
 		gpointer value, gpointer value_vtable, int value_pinned) MONO_INTERNAL;
+void binary_protocol_dislink_update (gpointer link, gpointer obj, int track) MONO_INTERNAL;
 
 #else
+
+#define binary_protocol_is_enabled()	FALSE
 
 #define binary_protocol_flush_buffers(force)
 #define binary_protocol_collection(generation)
@@ -163,5 +180,6 @@ void binary_protocol_missing_remset (gpointer obj, gpointer obj_vtable, int offs
 #define binary_protocol_thread_register(thread)
 #define binary_protocol_thread_unregister(thread)
 #define binary_protocol_missing_remset(obj, obj_vtable, offset, value, value_vtable, value_pinned)
+#define binary_protocol_dislink_update(link,obj,track)
 
 #endif
