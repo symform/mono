@@ -18,6 +18,7 @@
  * IN THE SOFTWARE.
  */
  
+#include <assert.h>
 #include "mini.h"
 #include "proctitle.h"
 
