@@ -1023,6 +1023,11 @@ mono_arch_regalloc_cost (MonoCompile *cfg, MonoMethodVar *vmv)
 #define __GNUC_PREREQ(maj, min) (0)
 #endif
 
+#ifdef MONO_CROSS_COMPILE
+#elif __GNUC_PREREQ(4, 1)
+void __clear_cache(char *beg, char *end);
+#endif
+
 void
 mono_arch_flush_icache (guint8 *code, gint size)
 {
@@ -1035,7 +1040,7 @@ mono_arch_flush_icache (guint8 *code, gint size)
 #elif __APPLE__
 	sys_icache_invalidate (code, size);
 #elif __GNUC_PREREQ(4, 1)
-	__clear_cache (code, code + size);
+	__clear_cache ((char*)code, (char*)(code + size));
 #elif defined(PLATFORM_ANDROID)
 	const int syscall = 0xf0002;
 	__asm __volatile (
