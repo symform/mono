@@ -49,7 +49,8 @@ net_4_0_dirs := \
 	mdbrebase
 
 net_2_0_dirs := \
-	$(per_profile_dirs)
+	$(per_profile_dirs) \
+	security
 
 build_SUBDIRS = gacutil security culevel
 net_2_0_SUBDIRS := $(basic_SUBDIRS) $(net_2_0_dirs)

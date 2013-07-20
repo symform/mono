@@ -74,7 +74,6 @@ scripts_4_0 = \
 	soapsuds$(SCRIPT_SUFFIX)		\
 	caspol$(SCRIPT_SUFFIX)			\
 	cert2spc$(SCRIPT_SUFFIX)		\
-	certmgr$(SCRIPT_SUFFIX)			\
 	chktrust$(SCRIPT_SUFFIX)		\
 	crlupdate$(SCRIPT_SUFFIX)		\
 	csharp$(SCRIPT_SUFFIX)			\
