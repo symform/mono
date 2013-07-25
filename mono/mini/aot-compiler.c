@@ -3484,8 +3484,26 @@ add_wrappers (MonoAotCompile *acfg)
 		token = MONO_TOKEN_METHOD_DEF | (i + 1);
 		method = mono_get_method (acfg->image, token, NULL);
 
-		if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED && !method->is_generic)
-			add_method (acfg, mono_marshal_get_synchronized_wrapper (method));
+		if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED) {
+			if (method->is_generic) {
+				// FIXME:
+			} else if (method->klass->generic_container) {
+				MonoGenericContext ctx;
+				MonoMethod *inst, *gshared, *m;
+
+				/*
+				 * Create a generic wrapper for a generic instance, and AOT that.
+				 */
+				create_gsharedvt_inst (acfg, method, &ctx);
+				inst = mono_class_inflate_generic_method (method, &ctx);	
+				m = mono_marshal_get_synchronized_wrapper (inst);
+				g_assert (m->is_inflated);
+				gshared = mini_get_shared_method_full (m, FALSE, TRUE);
+				add_method (acfg, gshared);
+			} else {
+				add_method (acfg, mono_marshal_get_synchronized_wrapper (method));
+			}
+		}
 	}
 
 	/* pinvoke wrappers */
@@ -4365,7 +4383,7 @@ get_file_index (MonoAotCompile *acfg, const char *source_file)
 		findex = g_hash_table_size (acfg->dwarf_ln_filenames) + 1;
 		g_hash_table_insert (acfg->dwarf_ln_filenames, g_strdup (source_file), GINT_TO_POINTER (findex));
 		emit_unset_mode (acfg);
-		fprintf (acfg->fp, ".file %d \"%s\"\n", findex, source_file);
+		fprintf (acfg->fp, ".file %d \"%s\"\n", findex, mono_dwarf_escape_path (source_file));
 	}
 	return findex;
 }
@@ -6165,6 +6183,7 @@ can_encode_method (MonoAotCompile *acfg, MonoMethod *method)
 			case MONO_WRAPPER_DELEGATE_INVOKE:
 			case MONO_WRAPPER_DELEGATE_BEGIN_INVOKE:
 			case MONO_WRAPPER_DELEGATE_END_INVOKE:
+			case MONO_WRAPPER_SYNCHRONIZED:
 				break;
 			case MONO_WRAPPER_MANAGED_TO_MANAGED:
 			case MONO_WRAPPER_CASTCLASS: {
@@ -6938,7 +6957,7 @@ emit_code (MonoAotCompile *acfg)
 		 * This is PIE code, and the linker can update it if needed.
 		 */
 		sprintf (symbol, "method_addresses");
-		emit_section_change (acfg, RODATA_SECT, 1);
+		emit_section_change (acfg, ".text", 1);
 		emit_alignment (acfg, 8);
 		emit_label (acfg, symbol);
 		emit_local_symbol (acfg, symbol, "method_addresses_end", TRUE);
@@ -7004,7 +7023,10 @@ emit_code (MonoAotCompile *acfg)
 
 	/* Emit a sorted table mapping methods to their unbox trampolines */
 	sprintf (symbol, "unbox_trampolines");
-	emit_section_change (acfg, RODATA_SECT, 1);
+	if (acfg->direct_method_addresses)
+		emit_section_change (acfg, ".text", 0);
+	else
+		emit_section_change (acfg, RODATA_SECT, 0);
 	emit_alignment (acfg, 8);
 	emit_label (acfg, symbol);
 
@@ -7325,6 +7347,7 @@ emit_extra_methods (MonoAotCompile *acfg)
 		value = get_method_index (acfg, method);
 
 		hash = mono_aot_method_hash (method) % table_size;
+		//printf ("X: %s %d\n", mono_method_full_name (method, 1), hash);
 
 		chain_lengths [hash] ++;
 		max_chain_length = MAX (max_chain_length, chain_lengths [hash]);

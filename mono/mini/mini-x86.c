@@ -27,6 +27,7 @@
 #include <mono/utils/mono-counters.h>
 #include <mono/utils/mono-mmap.h>
 #include <mono/utils/mono-memory-model.h>
+#include <mono/utils/mono-hwcap-x86.h>
 
 #include "trace.h"
 #include "mini-x86.h"
@@ -698,129 +699,6 @@ mono_x86_tail_call_supported (MonoMethodSignature *caller_sig, MonoMethodSignatu
 	return res;
 }
 
-#if !defined(__native_client__)
-static const guchar cpuid_impl [] = {
-	0x55,                   	/* push   %ebp */
-	0x89, 0xe5,                	/* mov    %esp,%ebp */
-	0x53,                   	/* push   %ebx */
-	0x8b, 0x45, 0x08,             	/* mov    0x8(%ebp),%eax */
-	0x0f, 0xa2,                	/* cpuid   */
-	0x50,                   	/* push   %eax */
-	0x8b, 0x45, 0x10,             	/* mov    0x10(%ebp),%eax */
-	0x89, 0x18,                	/* mov    %ebx,(%eax) */
-	0x8b, 0x45, 0x14,             	/* mov    0x14(%ebp),%eax */
-	0x89, 0x08,                	/* mov    %ecx,(%eax) */
-	0x8b, 0x45, 0x18,             	/* mov    0x18(%ebp),%eax */
-	0x89, 0x10,                	/* mov    %edx,(%eax) */
-	0x58,                   	/* pop    %eax */
-	0x8b, 0x55, 0x0c,             	/* mov    0xc(%ebp),%edx */
-	0x89, 0x02,                	/* mov    %eax,(%edx) */
-	0x5b,                   	/* pop    %ebx */
-	0xc9,                   	/* leave   */
-	0xc3,                   	/* ret     */
-};
-#else
-static const guchar cpuid_impl [] = {
-	0x55,                   		/* push   %ebp */
-	0x89, 0xe5,                		/* mov    %esp,%ebp */
-	0x53,                   		/* push   %ebx */
-	0x8b, 0x45, 0x08,             		/* mov    0x8(%ebp),%eax */
-	0x0f, 0xa2,                		/* cpuid   */
-	0x50,                   		/* push   %eax */
-	0x8b, 0x45, 0x10,             		/* mov    0x10(%ebp),%eax */
-	0x89, 0x18,                		/* mov    %ebx,(%eax) */
-	0x8b, 0x45, 0x14,             		/* mov    0x14(%ebp),%eax */
-	0x89, 0x08,                		/* mov    %ecx,(%eax) */
-	0x8b, 0x45, 0x18,             		/* mov    0x18(%ebp),%eax */
-	0x89, 0x10,                		/* mov    %edx,(%eax) */
-	0x58,                   		/* pop    %eax */
-	0x8b, 0x55, 0x0c,             		/* mov    0xc(%ebp),%edx */
-	0x89, 0x02,                		/* mov    %eax,(%edx) */
-	0x5b,                   		/* pop    %ebx */
-	0xc9,                   		/* leave   */
-	0x59, 0x83, 0xe1, 0xe0, 0xff, 0xe1,	/* naclret */
-	0xf4, 0xf4, 0xf4, 0xf4, 0xf4, 0xf4,     /* padding, to provide bundle aligned version */
-	0xf4, 0xf4, 0xf4, 0xf4, 0xf4, 0xf4,
-	0xf4, 0xf4, 0xf4, 0xf4, 0xf4, 0xf4,
-	0xf4, 0xf4, 0xf4, 0xf4, 0xf4, 0xf4,
-	0xf4
-};
-#endif
-
-typedef void (*CpuidFunc) (int id, int* p_eax, int* p_ebx, int* p_ecx, int* p_edx);
-
-static int 
-cpuid (int id, int* p_eax, int* p_ebx, int* p_ecx, int* p_edx)
-{
-#if defined(__native_client__)
-	static CpuidFunc func = NULL;
-	void *ptr, *end_ptr;
-	if (!func) {
-		ptr = mono_global_codeman_reserve (sizeof (cpuid_impl));
-		memcpy(ptr, cpuid_impl, sizeof(cpuid_impl));
-		end_ptr = ptr + sizeof(cpuid_impl);
-		nacl_global_codeman_validate (&ptr, sizeof(cpuid_impl), &end_ptr);
-		func = (CpuidFunc)ptr;
-	}
-	func (id, p_eax, p_ebx, p_ecx, p_edx);
-#else
-	int have_cpuid = 0;
-#ifndef _MSC_VER
-	__asm__  __volatile__ (
-		"pushfl\n"
-		"popl %%eax\n"
-		"movl %%eax, %%edx\n"
-		"xorl $0x200000, %%eax\n"
-		"pushl %%eax\n"
-		"popfl\n"
-		"pushfl\n"
-		"popl %%eax\n"
-		"xorl %%edx, %%eax\n"
-		"andl $0x200000, %%eax\n"
-		"movl %%eax, %0"
-		: "=r" (have_cpuid)
-		:
-		: "%eax", "%edx"
-	);
-#else
-	__asm {
-		pushfd
-		pop eax
-		mov edx, eax
-		xor eax, 0x200000
-		push eax
-		popfd
-		pushfd
-		pop eax
-		xor eax, edx
-		and eax, 0x200000
-		mov have_cpuid, eax
-	}
-#endif
-	if (have_cpuid) {
-		/* Have to use the code manager to get around WinXP DEP */
-		static CpuidFunc func = NULL;
-		void *ptr;
-		if (!func) {
-			ptr = mono_global_codeman_reserve (sizeof (cpuid_impl));
-			memcpy (ptr, cpuid_impl, sizeof (cpuid_impl));
-			func = (CpuidFunc)ptr;
-		}
-		func (id, p_eax, p_ebx, p_ecx, p_edx);
-
-		/*
-		 * We use this approach because of issues with gcc and pic code, see:
-		 * http://gcc.gnu.org/cgi-bin/gnatsweb.pl?cmd=view%20audit-trail&database=gcc&pr=7329
-		__asm__ __volatile__ ("cpuid"
-			: "=a" (*p_eax), "=b" (*p_ebx), "=c" (*p_ecx), "=d" (*p_edx)
-			: "a" (id));
-		*/
-		return 1;
-	}
-	return 0;
-#endif
-}
-
 /*
  * Initialize the cpu to execute managed code.
  */
@@ -880,36 +758,32 @@ guint32
 mono_arch_cpu_optimizations (guint32 *exclude_mask)
 {
 #if !defined(__native_client__)
-	int eax, ebx, ecx, edx;
 	guint32 opts = 0;
-	
+
 	*exclude_mask = 0;
 
-	if (mono_aot_only)
-		/* The cpuid function allocates from the global codeman */
-		return opts;
+	if (mono_hwcap_x86_has_cmov) {
+		opts |= MONO_OPT_CMOV;
 
-	/* Feature Flags function, flags returned in EDX. */
-	if (cpuid (1, &eax, &ebx, &ecx, &edx)) {
-		if (edx & (1 << 15)) {
-			opts |= MONO_OPT_CMOV;
-			if (edx & 1)
-				opts |= MONO_OPT_FCMOV;
-			else
-				*exclude_mask |= MONO_OPT_FCMOV;
-		} else
-			*exclude_mask |= MONO_OPT_CMOV;
-		if (edx & (1 << 26))
-			opts |= MONO_OPT_SSE2;
+		if (mono_hwcap_x86_has_fcmov)
+			opts |= MONO_OPT_FCMOV;
 		else
-			*exclude_mask |= MONO_OPT_SSE2;
+			*exclude_mask |= MONO_OPT_FCMOV;
+	} else {
+		*exclude_mask |= MONO_OPT_CMOV;
+	}
+
+	if (mono_hwcap_x86_has_sse2)
+		opts |= MONO_OPT_SSE2;
+	else
+		*exclude_mask |= MONO_OPT_SSE2;
 
 #ifdef MONO_ARCH_SIMD_INTRINSICS
 		/*SIMD intrinsics require at least SSE2.*/
-		if (!(opts & MONO_OPT_SSE2))
+		if (!mono_hwcap_x86_has_sse2)
 			*exclude_mask |= MONO_OPT_SIMD;
 #endif
-	}
+
 	return opts;
 #else
 	return MONO_OPT_CMOV | MONO_OPT_FCMOV | MONO_OPT_SSE2;
@@ -925,42 +799,30 @@ mono_arch_cpu_optimizations (guint32 *exclude_mask)
 guint32
 mono_arch_cpu_enumerate_simd_versions (void)
 {
-	int eax, ebx, ecx, edx;
 	guint32 sse_opts = 0;
 
-	if (mono_aot_only)
-		/* The cpuid function allocates from the global codeman */
-		return sse_opts;
+	if (mono_hwcap_x86_has_sse1)
+		sse_opts |= SIMD_VERSION_SSE1;
 
-	if (cpuid (1, &eax, &ebx, &ecx, &edx)) {
-		if (edx & (1 << 25))
-			sse_opts |= SIMD_VERSION_SSE1;
-		if (edx & (1 << 26))
-			sse_opts |= SIMD_VERSION_SSE2;
-		if (ecx & (1 << 0))
-			sse_opts |= SIMD_VERSION_SSE3;
-		if (ecx & (1 << 9))
-			sse_opts |= SIMD_VERSION_SSSE3;
-		if (ecx & (1 << 19))
-			sse_opts |= SIMD_VERSION_SSE41;
-		if (ecx & (1 << 20))
-			sse_opts |= SIMD_VERSION_SSE42;
-	}
+	if (mono_hwcap_x86_has_sse2)
+		sse_opts |= SIMD_VERSION_SSE2;
 
-	/* Yes, all this needs to be done to check for sse4a.
-	   See: "Amd: CPUID Specification"
-	 */
-	if (cpuid (0x80000000, &eax, &ebx, &ecx, &edx)) {
-		/* eax greater or equal than 0x80000001, ebx = 'htuA', ecx = DMAc', edx = 'itne'*/
-		if ((((unsigned int) eax) >= 0x80000001) && (ebx == 0x68747541) && (ecx == 0x444D4163) && (edx == 0x69746E65)) {
-			cpuid (0x80000001, &eax, &ebx, &ecx, &edx);
-			if (ecx & (1 << 6))
-				sse_opts |= SIMD_VERSION_SSE4a;
-		}
-	}
+	if (mono_hwcap_x86_has_sse3)
+		sse_opts |= SIMD_VERSION_SSE3;
 
+	if (mono_hwcap_x86_has_ssse3)
+		sse_opts |= SIMD_VERSION_SSSE3;
 
-	return sse_opts;	
+	if (mono_hwcap_x86_has_sse41)
+		sse_opts |= SIMD_VERSION_SSE41;
+
+	if (mono_hwcap_x86_has_sse42)
+		sse_opts |= SIMD_VERSION_SSE42;
+
+	if (mono_hwcap_x86_has_sse4a)
+		sse_opts |= SIMD_VERSION_SSE4a;
+
+	return sse_opts;
 }
 
 /*
@@ -1316,6 +1178,7 @@ mono_arch_create_vars (MonoCompile *cfg)
 	}
 
 	cfg->arch_eh_jit_info = 1;
+	cfg->create_lmf_var = 1;
 }
 
 /*
@@ -2495,6 +2358,143 @@ emit_load_volatile_arguments (MonoCompile *cfg, guint8 *code)
 		}
 	}
 
+	return code;
+}
+
+/*
+ * emit_setup_lmf:
+ *
+ *   Emit code to initialize an LMF structure at LMF_OFFSET.
+ */
+static guint8*
+emit_setup_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset, int cfa_offset)
+{
+	/* save the current IP */
+	if (cfg->compile_aot) {
+		/* This pushes the current ip */
+		x86_call_imm (code, 0);
+		x86_pop_reg (code, X86_EAX);
+	} else {
+		mono_add_patch_info (cfg, code + 1 - cfg->native_code, MONO_PATCH_INFO_IP, NULL);
+		x86_mov_reg_imm (code, X86_EAX, 0);
+	}
+	x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, eip), X86_EAX, sizeof (mgreg_t));
+
+	/* save all caller saved regs */
+	x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebp), X86_EBP, sizeof (mgreg_t));
+	x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, esi), X86_ESI, sizeof (mgreg_t));
+	x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, edi), X86_EDI, sizeof (mgreg_t));
+	x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebx), X86_EBX, sizeof (mgreg_t));
+
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, eip), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebp), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, esi), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, edi), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebx), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, esp), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, method), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, lmf_addr), SLOT_NOREF);
+	mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), SLOT_NOREF);
+
+	return code;
+}
+
+/*
+ * emit_save_lmf:
+ *
+ *   Emit code to push an LMF structure on the LMF stack.
+ */
+static guint8*
+emit_save_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset)
+{
+	if ((lmf_tls_offset != -1) && !is_win32 && !optimize_for_xen) {
+		/*
+		 * Optimized version which uses the mono_lmf TLS variable instead of indirection
+		 * through the mono_lmf_addr TLS variable.
+		 */
+		/* %eax = previous_lmf */
+		code = mono_x86_emit_tls_get (code, X86_EAX, lmf_tls_offset);
+		/* set previous_lmf */
+		x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), X86_EAX, sizeof (mgreg_t));
+		x86_lea_membase (code, X86_EAX, cfg->frame_reg, lmf_offset);
+		/* set new LMF */
+		code = mono_x86_emit_tls_set (code, X86_EAX, lmf_tls_offset);
+	} else {
+		/* get the address of lmf for the current thread */
+		/* 
+		 * This is performance critical so we try to use some tricks to make
+		 * it fast.
+		 */									   
+		if (lmf_addr_tls_offset != -1) {
+			/* Load lmf quicky using the GS register */
+			code = mono_x86_emit_tls_get (code, X86_EAX, lmf_addr_tls_offset);
+#ifdef TARGET_WIN32
+			/* The TLS key actually contains a pointer to the MonoJitTlsData structure */
+			/* FIXME: Add a separate key for LMF to avoid this */
+			x86_alu_reg_imm (code, X86_ADD, X86_EAX, G_STRUCT_OFFSET (MonoJitTlsData, lmf));
+#endif
+		} else {
+			if (cfg->compile_aot)
+				code = mono_arch_emit_load_got_addr (cfg->native_code, code, cfg, NULL);
+			code = emit_call (cfg, code, MONO_PATCH_INFO_INTERNAL_METHOD, (gpointer)"mono_get_lmf_addr");
+		}
+
+		/* save lmf_addr */
+		x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, lmf_addr), X86_EAX, sizeof (mgreg_t));
+		/* save previous_lmf */
+		x86_mov_reg_membase (code, X86_ECX, X86_EAX, 0, sizeof (mgreg_t));
+		x86_mov_membase_reg (code, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), X86_ECX, sizeof (mgreg_t));
+		/* set new LMF */
+		x86_lea_membase (code, X86_ECX, cfg->frame_reg, lmf_offset);
+		x86_mov_membase_reg (code, X86_EAX, 0, X86_ECX, sizeof (mgreg_t));
+	}
+	return code;
+}
+
+/*
+ * emit_restore_lmf:
+ *
+ *   Emit code to pop an LMF structure from the LMF stack.
+ * Preserves the return registers.
+ */
+static guint8*
+emit_restore_lmf (MonoCompile *cfg, guint8 *code, gint32 lmf_offset)
+{
+	MonoMethodSignature *sig = mono_method_signature (cfg->method);
+	int prev_lmf_reg;
+
+	if ((lmf_tls_offset != -1) && !is_win32 && !optimize_for_xen) {
+		/*
+		 * Optimized version which uses the mono_lmf TLS variable instead of indirection
+		 * through the mono_lmf_addr TLS variable.
+		 */
+		/* reg = previous_lmf */
+		x86_mov_reg_membase (code, X86_ECX, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), 4);
+
+		/* lmf = previous_lmf */
+		code = mono_x86_emit_tls_set (code, X86_ECX, lmf_tls_offset);
+	} else {
+		/* Find a spare register */
+		switch (mini_type_get_underlying_type (cfg->generic_sharing_context, sig->ret)->type) {
+		case MONO_TYPE_I8:
+		case MONO_TYPE_U8:
+			prev_lmf_reg = X86_EDI;
+			cfg->used_int_regs |= (1 << X86_EDI);
+			break;
+		default:
+			prev_lmf_reg = X86_EDX;
+			break;
+		}
+
+		/* reg = previous_lmf */
+		x86_mov_reg_membase (code, prev_lmf_reg, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), 4);
+
+		/* ecx = lmf */
+		x86_mov_reg_membase (code, X86_ECX, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, lmf_addr), 4);
+
+		/* *(lmf) = previous_lmf */
+		x86_mov_membase_reg (code, X86_ECX, 0, prev_lmf_reg, 4);
+	}
 	return code;
 }
 
@@ -5209,89 +5209,7 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 	alloc_size = cfg->stack_offset;
 	pos = 0;
 
-	if (method->save_lmf) {
-		pos += sizeof (MonoLMF);
-
-		/* save the current IP */
-		if (cfg->compile_aot) {
-			/* This pushes the current ip */
-			x86_call_imm (code, 0);
-		} else {
-			mono_add_patch_info (cfg, code + 1 - cfg->native_code, MONO_PATCH_INFO_IP, NULL);
-			x86_push_imm_template (code);
-		}
-		cfa_offset += sizeof (gpointer);
-		mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-
-		/* save all caller saved regs */
-		x86_push_reg (code, X86_EBP);
-		cfa_offset += sizeof (gpointer);
-		mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-		x86_push_reg (code, X86_ESI);
-		cfa_offset += sizeof (gpointer);
-		mono_emit_unwind_op_offset (cfg, code, X86_ESI, - cfa_offset);
-		mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-		x86_push_reg (code, X86_EDI);
-		cfa_offset += sizeof (gpointer);
-		mono_emit_unwind_op_offset (cfg, code, X86_EDI, - cfa_offset);
-		mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-		x86_push_reg (code, X86_EBX);
-		cfa_offset += sizeof (gpointer);
-		mono_emit_unwind_op_offset (cfg, code, X86_EBX, - cfa_offset);
-		mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-
-		if ((lmf_tls_offset != -1) && !is_win32 && !optimize_for_xen) {
-			/*
-			 * Optimized version which uses the mono_lmf TLS variable instead of indirection
-			 * through the mono_lmf_addr TLS variable.
-			 */
-			/* %eax = previous_lmf */
-			code = mono_x86_emit_tls_get (code, X86_EAX, lmf_tls_offset);
-			/* skip esp + method_info + lmf */
-			x86_alu_reg_imm (code, X86_SUB, X86_ESP, 12);
-			cfa_offset += 12;
-			mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-			mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + 4, SLOT_NOREF);
-			mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset + 8, SLOT_NOREF);
-			/* push previous_lmf */
-			x86_push_reg (code, X86_EAX);
-			cfa_offset += 4;
-			mini_gc_set_slot_type_from_cfa (cfg, -cfa_offset, SLOT_NOREF);
-			/* new lmf = ESP */
-			code = mono_x86_emit_tls_set (code, X86_ESP, lmf_tls_offset);
-		} else {
-			/* get the address of lmf for the current thread */
-			/* 
-			 * This is performance critical so we try to use some tricks to make
-			 * it fast.
-			 */									   
-
-			if (lmf_addr_tls_offset != -1) {
-				/* Load lmf quicky using the GS register */
-				code = mono_x86_emit_tls_get (code, X86_EAX, lmf_addr_tls_offset);
-#ifdef TARGET_WIN32
-				/* The TLS key actually contains a pointer to the MonoJitTlsData structure */
-				/* FIXME: Add a separate key for LMF to avoid this */
-				x86_alu_reg_imm (code, X86_ADD, X86_EAX, G_STRUCT_OFFSET (MonoJitTlsData, lmf));
-#endif
-			} else {
-				if (cfg->compile_aot)
-					code = mono_arch_emit_load_got_addr (cfg->native_code, code, cfg, NULL);
-				code = emit_call (cfg, code, MONO_PATCH_INFO_INTERNAL_METHOD, (gpointer)"mono_get_lmf_addr");
-			}
-
-			/* Skip esp + method info */
-			x86_alu_reg_imm (code, X86_SUB, X86_ESP, 8);
-
-			/* push lmf */
-			x86_push_reg (code, X86_EAX); 
-			/* push *lfm (previous_lmf) */
-			x86_push_membase (code, X86_EAX, 0);
-			/* *(lmf) = ESP */
-			x86_mov_membase_reg (code, X86_EAX, 0, X86_ESP, 4);
-		}
-	} else {
-
+	if (!method->save_lmf) {
 		if (cfg->used_int_regs & (1 << X86_EBX)) {
 			x86_push_reg (code, X86_EBX);
 			pos += 4;
@@ -5439,6 +5357,11 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 		x86_mov_membase_reg (code, X86_EBP, cfg->rgctx_var->inst_offset, MONO_ARCH_RGCTX_REG, 4);
 	}
 
+	if (method->save_lmf) {
+		code = emit_setup_lmf (cfg, code, cfg->lmf_var->inst_offset, cfa_offset);
+		code = emit_save_lmf (cfg, code, cfg->lmf_var->inst_offset);
+	}
+
 	if (mono_jit_trace_calls != NULL && mono_trace_eval (method))
 		code = mono_arch_instrument_prolog (cfg, mono_trace_enter_method, code, TRUE);
 
@@ -5494,8 +5417,7 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 	pos = 0;
 	
 	if (method->save_lmf) {
-		gint32 prev_lmf_reg;
-		gint32 lmf_offset = -sizeof (MonoLMF);
+		gint32 lmf_offset = cfg->lmf_var->inst_offset;
 
 		/* check if we need to restore protection of the stack after a stack overflow */
 		if (mono_get_jit_tls_offset () != -1) {
@@ -5514,49 +5436,19 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 		} else {
 			/* FIXME: maybe save the jit tls in the prolog */
 		}
-		if ((lmf_tls_offset != -1) && !is_win32 && !optimize_for_xen) {
-			/*
-			 * Optimized version which uses the mono_lmf TLS variable instead of indirection
-			 * through the mono_lmf_addr TLS variable.
-			 */
-			/* reg = previous_lmf */
-			x86_mov_reg_membase (code, X86_ECX, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), 4);
 
-			/* lmf = previous_lmf */
-			code = mono_x86_emit_tls_set (code, X86_ECX, lmf_tls_offset);
-		} else {
-			/* Find a spare register */
-			switch (mini_type_get_underlying_type (cfg->generic_sharing_context, sig->ret)->type) {
-			case MONO_TYPE_I8:
-			case MONO_TYPE_U8:
-				prev_lmf_reg = X86_EDI;
-				cfg->used_int_regs |= (1 << X86_EDI);
-				break;
-			default:
-				prev_lmf_reg = X86_EDX;
-				break;
-			}
-
-			/* reg = previous_lmf */
-			x86_mov_reg_membase (code, prev_lmf_reg, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, previous_lmf), 4);
-
-			/* ecx = lmf */
-			x86_mov_reg_membase (code, X86_ECX, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, lmf_addr), 4);
-
-			/* *(lmf) = previous_lmf */
-			x86_mov_membase_reg (code, X86_ECX, 0, prev_lmf_reg, 4);
-		}
+		code = emit_restore_lmf (cfg, code, lmf_offset);
 
 		/* restore caller saved regs */
 		if (cfg->used_int_regs & (1 << X86_EBX)) {
-			x86_mov_reg_membase (code, X86_EBX, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebx), 4);
+			x86_mov_reg_membase (code, X86_EBX, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, ebx), 4);
 		}
 
 		if (cfg->used_int_regs & (1 << X86_EDI)) {
-			x86_mov_reg_membase (code, X86_EDI, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, edi), 4);
+			x86_mov_reg_membase (code, X86_EDI, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, edi), 4);
 		}
 		if (cfg->used_int_regs & (1 << X86_ESI)) {
-			x86_mov_reg_membase (code, X86_ESI, X86_EBP, lmf_offset + G_STRUCT_OFFSET (MonoLMF, esi), 4);
+			x86_mov_reg_membase (code, X86_ESI, cfg->frame_reg, lmf_offset + G_STRUCT_OFFSET (MonoLMF, esi), 4);
 		}
 
 		/* EBP is restored by LEAVE */
@@ -6273,13 +6165,16 @@ mono_arch_get_delegate_invoke_impls (void)
 	guint8 *code;
 	guint32 code_len;
 	int i;
+	char *tramp_name;
 
 	code = get_delegate_invoke_impl (TRUE, 0, &code_len);
-	res = g_slist_prepend (res, mono_tramp_info_create (g_strdup ("delegate_invoke_impl_has_target"), code, code_len, NULL, NULL));
+	res = g_slist_prepend (res, mono_tramp_info_create ("delegate_invoke_impl_has_target", code, code_len, NULL, NULL));
 
 	for (i = 0; i < MAX_ARCH_DELEGATE_PARAMS; ++i) {
 		code = get_delegate_invoke_impl (FALSE, i, &code_len);
-		res = g_slist_prepend (res, mono_tramp_info_create (g_strdup_printf ("delegate_invoke_impl_target_%d", i), code, code_len, NULL, NULL));
+		tramp_name = g_strdup_printf ("delegate_invoke_impl_target_%d", i);
+		res = g_slist_prepend (res, mono_tramp_info_create (tramp_name, code, code_len, NULL, NULL));
+		g_free (tramp_name);
 	}
 
 	return res;

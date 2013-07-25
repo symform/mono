@@ -80,7 +80,7 @@ namespace Mono.CSharp
 		public override void Emit (EmitContext ec)
 		{
 			var call = new CallEmitter ();
-			call.EmitPredefined (ec, oper, arguments);
+			call.EmitPredefined (ec, oper, arguments, loc);
 		}
 
 		public override SLE.Expression MakeExpression (BuilderContext ctx)
@@ -2752,6 +2752,12 @@ namespace Mono.CSharp
 				if (l.IsPointer || r.IsPointer)
 					return ResolveOperatorPointer (rc, l, r);
 
+				// User operators
+				expr = ResolveUserOperator (rc, left, right);
+				if (expr != null)
+					return expr;
+
+
 				bool lenum = l.IsEnum;
 				bool renum = r.IsEnum;
 				if ((oper & (Operator.ComparisonMask | Operator.BitwiseMask)) != 0) {
@@ -2805,11 +2811,6 @@ namespace Mono.CSharp
 							return expr;
 					}
 				}
-
-				// User operators
-				expr = ResolveUserOperator (rc, left, right);
-				if (expr != null)
-					return expr;
 			}
 			
 			//
@@ -3865,9 +3866,15 @@ namespace Mono.CSharp
 				//
 				// Now try lifted version of predefined operators
 				//
-				result = ResolveOperatorPredefined (ec, ec.Module.OperatorsBinaryEqualityLifted, no_arg_conv);
-				if (result != null)
-					return result;
+				if (no_arg_conv && !l.IsNullableType) {
+					//
+					// Optimizes cases which won't match
+					//
+				} else {
+					result = ResolveOperatorPredefined (ec, ec.Module.OperatorsBinaryEqualityLifted, no_arg_conv);
+					if (result != null)
+						return result;
+				}
 
 				//
 				// The == and != operators permit one operand to be a value of a nullable
@@ -4330,6 +4337,14 @@ namespace Mono.CSharp
 		/// </remarks>
 		public override void EmitBranchable (EmitContext ec, Label target, bool on_true)
 		{
+			if (ec.HasSet (BuilderContext.Options.AsyncBody) && right.ContainsEmitWithAwait ()) {
+				left = left.EmitToField (ec);
+
+				if ((oper & Operator.LogicalMask) == 0) {
+					right = right.EmitToField (ec);
+				}
+			}
+
 			//
 			// This is more complicated than it looks, but its just to avoid
 			// duplicated tests: basically, we allow ==, !=, >, <, >= and <=
@@ -6015,7 +6030,7 @@ namespace Mono.CSharp
 				if (member_expr != null)
 					member_expr = member_expr.Resolve (ec);
 			} else {
-				member_expr = expr.Resolve (ec, ResolveFlags.VariableOrValue | ResolveFlags.MethodGroup);
+				member_expr = expr.Resolve (ec);
 			}
 
 			if (member_expr == null)
@@ -6533,14 +6548,16 @@ namespace Mono.CSharp
 				}
 
 				if (vr != null) {
+					ec.MarkCallEntry (loc);
 					ec.Emit (OpCodes.Call, method);
 					return false;
 				}
 			}
 			
 			if (type is TypeParameterSpec)
-				return DoEmitTypeParameter (ec);			
+				return DoEmitTypeParameter (ec);
 
+			ec.MarkCallEntry (loc);
 			ec.Emit (OpCodes.Newobj, method);
 			return true;
 		}
@@ -8598,7 +8615,7 @@ namespace Mono.CSharp
 
 				e = e.ResolveLValue (rc, right_side);
 			} else {
-				e = e.Resolve (rc, ResolveFlags.VariableOrValue | ResolveFlags.Type);
+				e = e.Resolve (rc, ResolveFlags.VariableOrValue | ResolveFlags.Type | ResolveFlags.MethodGroup);
 			}
 
 			return e;
@@ -10037,6 +10054,7 @@ namespace Mono.CSharp
 		public override void Emit (EmitContext ec)
 		{
 			source.Emit (ec);
+			ec.MarkCallEntry (loc);
 			ec.Emit (OpCodes.Call, method);
 		}
 
@@ -10550,6 +10568,12 @@ namespace Mono.CSharp
 			foreach (Expression e in arguments)
 				base.arguments.Add (new ElementInitializerArgument (e));
 
+			this.loc = loc;
+		}
+
+		public CollectionElementInitializer (Location loc)
+			: base (null, null)
+		{
 			this.loc = loc;
 		}
 
