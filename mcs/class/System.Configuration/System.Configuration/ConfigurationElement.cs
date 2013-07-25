@@ -727,6 +727,10 @@ namespace System.Configuration
 					continue;
 
 				var elem = (ConfigurationElement)prop.Value;
+
+				if (elem == null)
+				    continue;
+
 				if (parent == null || !parent.HasValue (prop.Name))
 					elem.PrepareSave (null, mode);
 				else {
