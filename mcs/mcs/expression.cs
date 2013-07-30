@@ -1662,8 +1662,10 @@ namespace Mono.CSharp
 				return this;
 			}
 
-			ec.Report.Error (39, loc, "Cannot convert type `{0}' to `{1}' via a built-in conversion",
-				etype.GetSignatureForError (), type.GetSignatureForError ());
+			if (etype != InternalType.ErrorType) {
+				ec.Report.Error (39, loc, "Cannot convert type `{0}' to `{1}' via a built-in conversion",
+					etype.GetSignatureForError (), type.GetSignatureForError ());
+			}
 
 			return null;
 		}
@@ -1930,8 +1932,8 @@ namespace Mono.CSharp
 
 					if (right_expr.IsNull) {
 						if ((b.oper & Operator.EqualityMask) != 0) {
-							if (!left_expr.Type.IsNullableType && left_expr.Type == left_unwrap)
-								return b.CreateLiftedValueTypeResult (rc, left_unwrap);
+							if (!left_expr.Type.IsNullableType && BuiltinTypeSpec.IsPrimitiveType (left_expr.Type))
+								return b.CreateLiftedValueTypeResult (rc, left_expr.Type);
 						} else if ((b.oper & Operator.BitwiseMask) != 0) {
 							if (left_unwrap.BuiltinType != BuiltinTypeSpec.Type.Bool)
 								return Nullable.LiftedNull.CreateFromExpression (rc, b);
@@ -1946,8 +1948,8 @@ namespace Mono.CSharp
 						}
 					} else if (left_expr.IsNull) {
 						if ((b.oper & Operator.EqualityMask) != 0) {
-							if (!right_expr.Type.IsNullableType && right_expr.Type == right_unwrap)
-								return b.CreateLiftedValueTypeResult (rc, right_unwrap);
+							if (!right_expr.Type.IsNullableType && BuiltinTypeSpec.IsPrimitiveType (right_expr.Type))
+								return b.CreateLiftedValueTypeResult (rc, right_expr.Type);
 						} else if ((b.oper & Operator.BitwiseMask) != 0) {
 							if (right_unwrap.BuiltinType != BuiltinTypeSpec.Type.Bool)
 								return Nullable.LiftedNull.CreateFromExpression (rc, b);
@@ -3719,10 +3721,15 @@ namespace Mono.CSharp
 						Nullable.NullableInfo.GetEnumUnderlyingType (rc.Module, left.Type) :
 						EnumSpec.GetUnderlyingType (left.Type);
 				}
-			} else if (IsEnumOrNullableEnum (left.Type)) {
-				result_type = left.Type;
 			} else {
-				result_type = right.Type;
+				if (IsEnumOrNullableEnum (left.Type)) {
+					result_type = left.Type;
+				} else {
+					result_type = right.Type;
+				}
+
+				if (expr is Nullable.LiftedBinaryOperator && !result_type.IsNullableType)
+					result_type = rc.Module.PredefinedTypes.Nullable.TypeSpec.MakeGenericType (rc.Module, new[] { result_type });
 			}
 
 			return EmptyCast.Create (expr, result_type);
