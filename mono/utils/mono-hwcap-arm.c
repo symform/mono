@@ -47,7 +47,7 @@ mono_hwcap_arch_init (void)
 void
 mono_hwcap_arch_init (void)
 {
-#if defined(PLATFORM_ANDROID)
+#if defined(PLATFORM_ANDROID) || (defined(__linux__) && !defined(HAVE_SYS_AUXV_H))
 	/* We can't use the auxiliary vector on Android due to
 	 * permissions, so fall back to /proc/cpuinfo.
 	 */
