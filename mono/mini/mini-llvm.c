@@ -934,12 +934,12 @@ convert_full (EmitContext *ctx, LLVMValueRef v, LLVMTypeRef dtype, gboolean is_u
 		if (LLVMGetTypeKind (stype) == LLVMPointerTypeKind)
 			return LLVMBuildPtrToInt (ctx->builder, v, dtype, "");
 
-#ifdef MONO_ARCH_SOFT_FLOAT
-		if (stype == LLVMInt32Type () && dtype == LLVMFloatType ())
-			return LLVMBuildBitCast (ctx->builder, v, dtype, "");
-		if (stype == LLVMInt32Type () && dtype == LLVMDoubleType ())
-			return LLVMBuildBitCast (ctx->builder, LLVMBuildZExt (ctx->builder, v, LLVMInt64Type (), ""), dtype, "");
-#endif
+		if (mono_arch_is_soft_float ()) {
+			if (stype == LLVMInt32Type () && dtype == LLVMFloatType ())
+				return LLVMBuildBitCast (ctx->builder, v, dtype, "");
+			if (stype == LLVMInt32Type () && dtype == LLVMDoubleType ())
+				return LLVMBuildBitCast (ctx->builder, LLVMBuildZExt (ctx->builder, v, LLVMInt64Type (), ""), dtype, "");
+		}
 
 		if (LLVMGetTypeKind (stype) == LLVMVectorTypeKind && LLVMGetTypeKind (dtype) == LLVMVectorTypeKind)
 			return LLVMBuildBitCast (ctx->builder, v, dtype, "");
@@ -2868,10 +2868,10 @@ process_bb (EmitContext *ctx, MonoBasicBlock *bb)
 			values [ins->dreg] = LLVMBuildFPExt (builder, v, LLVMDoubleType (), dname);
 			break;
 		case OP_SEXT_I4:
-			values [ins->dreg] = LLVMBuildSExt (builder, lhs, LLVMInt64Type (), dname);
+			values [ins->dreg] = LLVMBuildSExt (builder, convert (ctx, lhs, LLVMInt32Type ()), LLVMInt64Type (), dname);
 			break;
 		case OP_ZEXT_I4:
-			values [ins->dreg] = LLVMBuildZExt (builder, lhs, LLVMInt64Type (), dname);
+			values [ins->dreg] = LLVMBuildZExt (builder, convert (ctx, lhs, LLVMInt32Type ()), LLVMInt64Type (), dname);
 			break;
 		case OP_TRUNC_I4:
 			values [ins->dreg] = LLVMBuildTrunc (builder, lhs, LLVMInt32Type (), dname);
@@ -4334,6 +4334,19 @@ mono_llvm_emit_method (MonoCompile *cfg)
 	}
 	g_free (names);
 
+	if (cfg->compile_aot) {
+		LLVMValueRef md_args [16];
+		LLVMValueRef md_node;
+		int method_index;
+
+		method_index = mono_aot_get_method_index (cfg->orig_method);
+		md_args [0] = LLVMMDString (method_name, strlen (method_name));
+		md_args [1] = LLVMConstInt (LLVMInt32Type (), method_index, FALSE);
+		md_node = LLVMMDNode (md_args, 2);
+		LLVMAddNamedMetadataOperand (module, "mono.function_indexes", md_node);
+		//LLVMSetMetadata (method, md_kind, LLVMMDNode (&md_arg, 1));
+	}
+
 	max_block_num = 0;
 	for (bb = cfg->bb_entry; bb; bb = bb->next_bb)
 		max_block_num = MAX (max_block_num, bb->block_num);
@@ -5135,7 +5148,7 @@ mono_llvm_create_aot_module (const char *got_symbol)
 		LLVMValueRef personality;
 
 		personality = LLVMAddFunction (aot_module.module, "mono_aot_personality", LLVMFunctionType (LLVMVoidType (), NULL, 0, FALSE));
-		LLVMSetLinkage (personality, LLVMPrivateLinkage);
+		LLVMSetLinkage (personality, LLVMInternalLinkage);
 		lbb = LLVMAppendBasicBlock (personality, "BB0");
 		lbuilder = LLVMCreateBuilder ();
 		LLVMPositionBuilderAtEnd (lbuilder, lbb);
