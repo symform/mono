@@ -566,6 +566,40 @@ mono_set_dirs (const char *assembly_dir, const char *config_dir)
 	mono_set_config_dir (config_dir);
 }
 
+/*
+ * mono_check_and_set_root:
+ *
+ * this routinge will check if the MONO_ROOT environment variable is set
+ * and if so will configure the lib and config directory. MONO_ROOT
+ * enables the easy relocation of mono.
+*/
+gboolean
+mono_check_and_set_root (void)
+{
+    const char* root;
+    gchar *lib, *config;
+    gboolean result;
+
+    root = g_getenv ("MONO_ROOT");
+
+    if (root == NULL)
+        return FALSE;
+
+    lib = g_build_path (G_DIR_SEPARATOR_S, root, "lib", NULL);
+    config = g_build_path (G_DIR_SEPARATOR_S, root, "etc", NULL);
+
+    result = FALSE;
+
+    if (g_file_test (lib, G_FILE_TEST_EXISTS) && g_file_test (config, G_FILE_TEST_EXISTS)) {
+        mono_set_dirs (lib, config);
+        result = TRUE;
+    }
+
+    g_free (lib);
+    g_free (config);
+    return result;
+}
+
 #ifndef HOST_WIN32
 
 static char *
@@ -639,6 +673,9 @@ mono_set_rootdir (void)
 #if defined(HOST_WIN32) || (defined(PLATFORM_MACOSX) && !defined(TARGET_ARM))
 	gchar *bindir, *installdir, *root, *name, *resolvedname, *config;
 
+       if (mono_check_and_set_root())
+           return;
+
 #ifdef HOST_WIN32
 	name = mono_get_module_file_name ((HMODULE) &__ImageBase);
 #else
@@ -692,6 +729,9 @@ mono_set_rootdir (void)
 	char buf [4096];
 	int  s;
 	char *str;
+
+       if (mono_check_and_set_root())
+           return;
 
 	/* Linux style */
 	s = readlink ("/proc/self/exe", buf, sizeof (buf)-1);
