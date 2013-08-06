@@ -573,31 +573,31 @@ mono_set_dirs (const char *assembly_dir, const char *config_dir)
  * and if so will configure the lib and config directory. MONO_ROOT
  * enables the easy relocation of mono.
 */
-gboolean
+static gboolean
 mono_check_and_set_root (void)
 {
-    const char* root;
-    gchar *lib, *config;
-    gboolean result;
+	const char* root;
+	gchar *lib, *config;
+	gboolean result;
 
-    root = g_getenv ("MONO_ROOT");
+	root = g_getenv ("MONO_ROOT");
 
-    if (root == NULL)
-        return FALSE;
+	if (root == NULL)
+		return FALSE;
 
-    lib = g_build_path (G_DIR_SEPARATOR_S, root, "lib", NULL);
-    config = g_build_path (G_DIR_SEPARATOR_S, root, "etc", NULL);
+	lib = g_build_path (G_DIR_SEPARATOR_S, root, "lib", NULL);
+	config = g_build_path (G_DIR_SEPARATOR_S, root, "etc", NULL);
 
-    result = FALSE;
+	result = FALSE;
 
-    if (g_file_test (lib, G_FILE_TEST_EXISTS) && g_file_test (config, G_FILE_TEST_EXISTS)) {
-        mono_set_dirs (lib, config);
-        result = TRUE;
-    }
+	if (g_file_test (lib, G_FILE_TEST_EXISTS) && g_file_test (config, G_FILE_TEST_EXISTS)) {
+		mono_set_dirs (lib, config);
+		result = TRUE;
+	}
 
-    g_free (lib);
-    g_free (config);
-    return result;
+	g_free (lib);
+	g_free (config);
+	return result;
 }
 
 #ifndef HOST_WIN32
@@ -673,8 +673,8 @@ mono_set_rootdir (void)
 #if defined(HOST_WIN32) || (defined(PLATFORM_MACOSX) && !defined(TARGET_ARM))
 	gchar *bindir, *installdir, *root, *name, *resolvedname, *config;
 
-       if (mono_check_and_set_root())
-           return;
+	if (mono_check_and_set_root())
+		return;
 
 #ifdef HOST_WIN32
 	name = mono_get_module_file_name ((HMODULE) &__ImageBase);
@@ -730,8 +730,8 @@ mono_set_rootdir (void)
 	int  s;
 	char *str;
 
-       if (mono_check_and_set_root())
-           return;
+	if (mono_check_and_set_root())
+		return;
 
 	/* Linux style */
 	s = readlink ("/proc/self/exe", buf, sizeof (buf)-1);
