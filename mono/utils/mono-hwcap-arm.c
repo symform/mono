@@ -90,8 +90,6 @@ mono_hwcap_arch_init (void)
 
 		const char *str = (const char *) platform;
 
-		g_print("getauxval AT_PLATFORM worked");
-
 		if (str [1] >= '5')
 			mono_hwcap_arm_is_v5 = TRUE;
 
