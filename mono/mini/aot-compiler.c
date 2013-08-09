@@ -3703,6 +3703,8 @@ has_type_vars (MonoClass *klass)
 					return TRUE;
 		}
 	}
+	if (klass->generic_container)
+		return TRUE;
 	return FALSE;
 }
 
@@ -3831,6 +3833,13 @@ add_generic_class_with_depth (MonoAotCompile *acfg, MonoClass *klass, int depth,
 
 	iter = NULL;
 	while ((method = mono_class_get_methods (klass, &iter))) {
+		if ((acfg->opts & MONO_OPT_GSHAREDVT) && method->is_inflated && mono_method_get_context (method)->method_inst) {
+			/*
+			 * This is partial sharing, and we can't handle it yet
+			 */
+			continue;
+		}
+		
 		if (mono_method_is_generic_sharable_full (method, FALSE, FALSE, use_gsharedvt))
 			/* Already added */
 			continue;
@@ -4441,7 +4450,7 @@ emit_and_reloc_code (MonoAotCompile *acfg, MonoMethod *method, guint8 *code, gui
 	MonoDebugSourceLocation **locs = NULL;
 	gboolean skip, direct_call, external_call;
 	guint32 got_slot;
-	const char *direct_call_target;
+	const char *direct_call_target = 0;
 	const char *direct_pinvoke;
 
 	if (method) {
@@ -8472,8 +8481,11 @@ mono_compile_assembly (MonoAssembly *ass, guint32 opts, const char *aot_options)
 	TV_DECLARE (atv);
 	TV_DECLARE (btv);
 
-#ifndef MONO_ARCH_GSHAREDVT_SUPPORTED
-	opts &= ~MONO_OPT_GSHAREDVT;
+#if !defined(MONO_ARCH_GSHAREDVT_SUPPORTED) || !defined(MONO_EXTENSIONS)
+	if (opts & MONO_OPT_GSHAREDVT) {
+		fprintf (stderr, "-O=gsharedvt not supported on this platform.\n");
+		exit (1);
+	}
 #endif
 
 	printf ("Mono Ahead of Time compiler - compiling assembly %s\n", image->name);
