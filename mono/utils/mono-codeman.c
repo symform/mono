@@ -478,11 +478,8 @@ mono_code_manager_foreach (MonoCodeManager *cman, MonoCodeManagerFunc func, void
  * bind_size = size/BIND_ROOM;
  * we should reduce it and make MIN_PAGES bigger for such systems
  */
-#if defined(__ppc__) || defined(__powerpc__)
+#if defined(__ppc__) || defined(__powerpc__) || defined(__arm__)
 #define BIND_ROOM 4
-#endif
-#if defined(__arm__)
-#define BIND_ROOM 8
 #endif
 
 static CodeChunk*
