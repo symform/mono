@@ -4493,8 +4493,8 @@ emit_and_reloc_code (MonoAotCompile *acfg, MonoMethod *method, guint8 *code, gui
 			mono_debug_symfile_free_location (loc);
 		}
 
-#ifdef MONO_ARCH_AOT_SUPPORTED
 		skip = FALSE;
+#ifdef MONO_ARCH_AOT_SUPPORTED
 		if (patch_info && (patch_info->ip.i == i) && (pindex < patches->len)) {
 			start_index = pindex;
 
@@ -8057,6 +8057,7 @@ emit_file_info (MonoAotCompile *acfg)
 		}
 		acfg->static_linking_symbol = g_strdup (symbol);
 		emit_global_inner (acfg, symbol, FALSE);
+		emit_alignment (acfg, sizeof (gpointer));
 		emit_label (acfg, symbol);
 		emit_pointer_2 (acfg, acfg->user_symbol_prefix, "mono_aot_file_info");
 	}
@@ -8481,7 +8482,7 @@ mono_compile_assembly (MonoAssembly *ass, guint32 opts, const char *aot_options)
 	TV_DECLARE (atv);
 	TV_DECLARE (btv);
 
-#if !defined(MONO_ARCH_GSHAREDVT_SUPPORTED) || !defined(MONO_EXTENSIONS)
+#if !defined(MONO_ARCH_GSHAREDVT_SUPPORTED) || (!defined(MONO_EXTENSIONS) && !defined(MONOTOUCH))
 	if (opts & MONO_OPT_GSHAREDVT) {
 		fprintf (stderr, "-O=gsharedvt not supported on this platform.\n");
 		exit (1);
