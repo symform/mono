@@ -3363,7 +3363,7 @@ handle_thunk (MonoDomain *domain, int absolute, guchar *code, const guchar *targ
 	}
 	if (pdata.found != 1)
 		g_print ("thunk failed for %p from %p\n", target, code);
-	g_assert (pdata.found == 1);
+	// g_assert (pdata.found == 1);
 }
 
 static void
