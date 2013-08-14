@@ -3361,8 +3361,17 @@ handle_thunk (MonoDomain *domain, int absolute, guchar *code, const guchar *targ
 		}
 		mono_domain_unlock (domain);
 	}
-	if (pdata.found != 1)
-		g_print ("thunk failed for %p from %p\n", target, code);
+	if (pdata.found != 1) {
+		MonoJitInfo *ji = mini_jit_info_table_find (domain, (char*)code, NULL);
+		MonoJitInfo *target_ji = mini_jit_info_table_find (domain, (char*)target, NULL);
+		char* nm = mono_method_full_name (ji->method, TRUE);
+		char* target_nm = mono_method_full_name (target_ji->method, TRUE);
+
+		g_print ("thunk failed for %p (%s) from %p (%s)\n", target, target_nm, code, nm);
+
+		g_free(nm);
+		g_free(target_nm);
+	}
 	// g_assert (pdata.found == 1);
 }
 
