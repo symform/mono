@@ -4404,8 +4404,20 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 				int end_offset;
 				if (ec->handler_offset + ec->handler_len < header->code_size) {
 					tblock = cfg->cil_offset_to_bb [ec->handler_offset + ec->handler_len];
-					g_assert (tblock);
-					end_offset = tblock->native_offset;
+					if (tblock->native_offset) {
+						end_offset = tblock->native_offset;
+					} else {
+						int j, end;
+
+						for (j = ec->handler_offset + ec->handler_len, end = ec->handler_offset; j >= end; --j) {
+							MonoBasicBlock *bb = cfg->cil_offset_to_bb [j];
+							if (bb && bb->native_offset) {
+								tblock = bb;
+								break;
+							}
+						}
+						end_offset = tblock->native_offset +  tblock->native_length;
+					}
 				} else {
 					end_offset = cfg->epilog_begin;
 				}
@@ -4421,8 +4433,9 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 			int start = (guint8*)ei->try_start - cfg->native_code;
 			int end = (guint8*)ei->try_end - cfg->native_code;
 			int handler = (guint8*)ei->handler_start - cfg->native_code;
+			int handler_end = (guint8*)ei->data.handler_end - cfg->native_code;
 
-			printf ("JitInfo EH clause %d flags %x try %x-%x handler %x\n", i, ei->flags, start, end, handler);
+			printf ("JitInfo EH clause %d flags %x try %x-%x handler %x-%x\n", i, ei->flags, start, end, handler, handler_end);
 		}
 	}
 
@@ -6792,6 +6805,7 @@ register_jit_stats (void)
 }
 
 static void runtime_invoke_info_free (gpointer value);
+static void seq_point_info_free (gpointer value);
  
 static void
 mini_create_jit_domain_info (MonoDomain *domain)
@@ -6804,7 +6818,7 @@ mini_create_jit_domain_info (MonoDomain *domain)
 	info->delegate_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->llvm_vcall_trampoline_hash = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->runtime_invoke_hash = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, runtime_invoke_info_free);
-	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, g_free);
+	info->seq_points = g_hash_table_new_full (mono_aligned_addr_hash, NULL, NULL, seq_point_info_free);
 	info->arch_seq_points = g_hash_table_new (mono_aligned_addr_hash, NULL);
 	info->jump_target_hash = g_hash_table_new (NULL, NULL);
 
@@ -6835,6 +6849,19 @@ runtime_invoke_info_free (gpointer value)
 	if (info->dyn_call_info)
 		mono_arch_dyn_call_free (info->dyn_call_info);
 #endif
+	g_free (info);
+}
+
+static void seq_point_info_free (gpointer value)
+{
+	int i = 0;
+	MonoSeqPointInfo* info = (MonoSeqPointInfo*)value;
+	
+	for (i = 0; i < info->len; ++i) {
+		SeqPoint *sp = &info->seq_points [i];
+		g_free (sp->next);
+	}
+
 	g_free (info);
 }
 
