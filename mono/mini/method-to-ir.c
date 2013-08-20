@@ -3517,7 +3517,7 @@ handle_unbox (MonoCompile *cfg, MonoClass *klass, MonoInst **sp, int context_use
 }
 
 static MonoInst*
-handle_unbox_gsharedvt (MonoCompile *cfg, int context_used, MonoClass *klass, MonoInst *obj, MonoBasicBlock **out_cbb)
+handle_unbox_gsharedvt (MonoCompile *cfg, MonoClass *klass, MonoInst *obj, MonoBasicBlock **out_cbb)
 {
 	MonoInst *addr, *klass_inst, *is_ref, *args[16];
 	MonoBasicBlock *is_ref_bb, *is_nullable_bb, *end_bb;
@@ -7602,9 +7602,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 					 */
 					if ((cmethod->klass != mono_defaults.object_class) && constrained_call->valuetype && cmethod->klass->valuetype) {
 						/* The 'Own method' case below */
-					} else if (((cmethod->klass == mono_defaults.object_class) || (cmethod->klass->flags & TYPE_ATTRIBUTE_INTERFACE)) &&
-							   (MONO_TYPE_IS_VOID (fsig->ret) || fsig->ret->type == MONO_TYPE_I4 || fsig->ret->type == MONO_TYPE_BOOLEAN || fsig->ret->type == MONO_TYPE_STRING) &&
-							   (fsig->param_count == 0 || (fsig->param_count == 1 && (MONO_TYPE_IS_REFERENCE (fsig->params [0]) || mini_is_gsharedvt_type (cfg, fsig->params [0]))))) {
+					} else if (((cmethod->klass == mono_defaults.object_class) || (cmethod->klass->flags & TYPE_ATTRIBUTE_INTERFACE) || (!cmethod->klass->valuetype && cmethod->klass->image != mono_defaults.corlib)) &&
+							   (MONO_TYPE_IS_VOID (fsig->ret) || MONO_TYPE_IS_PRIMITIVE (fsig->ret) || MONO_TYPE_IS_REFERENCE (fsig->ret) || mini_is_gsharedvt_type (cfg, fsig->ret)) &&
+							   (fsig->param_count == 0 || (!fsig->hasthis && fsig->param_count == 1) || (fsig->param_count == 1 && (MONO_TYPE_IS_REFERENCE (fsig->params [0]) || mini_is_gsharedvt_type (cfg, fsig->params [0]))))) {
 						MonoInst *args [16];
 
 						/*
@@ -7622,7 +7622,8 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 							EMIT_NEW_METHODCONST (cfg, args [1], cmethod);
 						args [2] = emit_get_rgctx_klass (cfg, mono_class_check_context_used (constrained_call), constrained_call, MONO_RGCTX_INFO_KLASS);
 
-						if (fsig->param_count) {
+						/* !fsig->hasthis is for the wrapper for the Object.GetType () icall */
+						if (fsig->hasthis && fsig->param_count) {
 							/* Pass the arguments using a localloc-ed array using the format expected by runtime_invoke () */
 							MONO_INST_NEW (cfg, ins, OP_LOCALLOC_IMM);
 							ins->dreg = alloc_preg (cfg);
@@ -7649,19 +7650,16 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 						ins = mono_emit_jit_icall (cfg, mono_gsharedvt_constrained_call, args);
 						emit_widen = FALSE;
 
-						if (fsig->ret->type == MONO_TYPE_I4 || fsig->ret->type == MONO_TYPE_BOOLEAN) {
+						if (mini_is_gsharedvt_type (cfg, fsig->ret)) {
+							ins = handle_unbox_gsharedvt (cfg, mono_class_from_mono_type (fsig->ret), ins, &bblock);
+						} else if (MONO_TYPE_IS_PRIMITIVE (fsig->ret)) {
 							MonoInst *add;
-							int dreg;
 
 							/* Unbox */
 							NEW_BIALU_IMM (cfg, add, OP_ADD_IMM, alloc_dreg (cfg, STACK_MP), ins->dreg, sizeof (MonoObject));
 							MONO_ADD_INS (cfg->cbb, add);
-							dreg = alloc_ireg (cfg);
 							/* Load value */
-							if (fsig->ret->type == MONO_TYPE_BOOLEAN)
-								NEW_LOAD_MEMBASE (cfg, ins, OP_LOADU1_MEMBASE, dreg, add->dreg, 0);
-							else
-								NEW_LOAD_MEMBASE (cfg, ins, OP_LOADI4_MEMBASE, dreg, add->dreg, 0);
+							NEW_LOAD_MEMBASE_TYPE (cfg, ins, fsig->ret, add->dreg, 0);
 							MONO_ADD_INS (cfg->cbb, ins);
 							/* ins represents the call result */
 						}
@@ -9425,7 +9423,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			context_used = mini_class_check_context_used (cfg, klass);
 
 			if (mini_is_gsharedvt_klass (cfg, klass)) {
-				*sp = handle_unbox_gsharedvt (cfg, context_used, klass, *sp, &bblock);
+				*sp = handle_unbox_gsharedvt (cfg, klass, *sp, &bblock);
 				sp ++;
 
 				ip += 5;
