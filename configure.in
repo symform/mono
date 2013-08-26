@@ -1611,6 +1611,8 @@ if test x$target_win32 = xno; then
 		], [
 				AC_MSG_RESULT(no)
 				with_tls=pthread
+		], [
+				AC_MSG_RESULT(cross compiling. test skipped)
 		])
 	fi
 
