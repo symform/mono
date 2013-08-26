@@ -16,7 +16,7 @@
 static int
 mono_main_with_options (int argc, char *argv [])
 {
-	const char *env_options = getenv ("MONO_ENV_OPTIONS");
+	const char *env_options = g_getenv ("MONO_ENV_OPTIONS");
     int ret;
 
     /* setup the arguments to support setting the process title */

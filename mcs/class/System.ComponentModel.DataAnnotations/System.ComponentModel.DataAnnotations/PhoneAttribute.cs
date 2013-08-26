@@ -1,10 +1,12 @@
 //
-// TaskAwaiterTest.cs
+// PhoneAttribute.cs
 //
 // Authors:
 //	Marek Safar  <marek.safar@gmail.com>
+//      Pablo Ruiz García <pablo.ruiz@gmail.com>
 //
-// Copyright (C) 2011 Xamarin, Inc (http://www.xamarin.com)
+// Copyright (C) 2013 Xamarin Inc (http://www.xamarin.com)
+// Copyright (C) 2013 Pablo Ruiz García
 //
 // Permission is hereby granted, free of charge, to any person obtaining
 // a copy of this software and associated documentation files (the
@@ -29,61 +31,37 @@
 #if NET_4_5
 
 using System;
-using System.Threading;
-using System.Threading.Tasks;
-using NUnit.Framework;
-using System.Runtime.CompilerServices;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
-namespace MonoTests.System.Runtime.CompilerServices
+namespace System.ComponentModel.DataAnnotations
 {
-	[TestFixture]
-	public class TaskAwaiterTest
+	[AttributeUsageAttribute (AttributeTargets.Property | AttributeTargets.Field | AttributeTargets.Parameter, AllowMultiple = false)]
+	public class PhoneAttribute : DataTypeAttribute
 	{
-		[Test]
-		public void GetResultFaulted ()
+		private const string DefaultErrorMessage = "The {0} field is not a valid phone number.";
+		private const string _regexStr = @"^\+?(\d[\d-. ]+)?(\([\d-. ]+\))?[\d-. ]+\d$";
+		private static Regex _regex = new Regex (_regexStr, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+		public PhoneAttribute ()
+			: base(DataType.PhoneNumber)
 		{
-			TaskAwaiter awaiter;
-
-			var task = new Task (() => { throw new ApplicationException (); });
-			awaiter = task.GetAwaiter ();
-			task.RunSynchronously (TaskScheduler.Current);
-
-
-			Assert.IsTrue (awaiter.IsCompleted);
-
-			try {
-				awaiter.GetResult ();
-				Assert.Fail ();
-			} catch (ApplicationException) {
-			}
+			// XXX: There is no .ctor accepting Func<string> on DataTypeAttribute.. :?
+			base.ErrorMessage = DefaultErrorMessage;
 		}
 
-		[Test]
-		public void GetResultCanceled ()
+		public override bool IsValid(object value)
 		{
-			TaskAwaiter awaiter;
+			if (value == null)
+				return true;
 
-			var token = new CancellationToken (true);
-			var task = new Task (() => { }, token);
-			awaiter = task.GetAwaiter ();
-
-			try {
-				awaiter.GetResult ();
-				Assert.Fail ();
-			} catch (TaskCanceledException) {
+			if (value is string)
+			{
+				var str = value as string;
+				return !string.IsNullOrEmpty(str) ? _regex.IsMatch(str) : false;
 			}
-		}
 
-		[Test]
-		public void GetResultWaitOnCompletion ()
-		{
-			TaskAwaiter awaiter;
-				
-			var task = Task.Delay (30);
-			awaiter = task.GetAwaiter ();
-				
-			awaiter.GetResult ();
-			Assert.AreEqual (TaskStatus.RanToCompletion, task.Status);
+			return false;
 		}
 	}
 }
