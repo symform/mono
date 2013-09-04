@@ -1994,19 +1994,18 @@ ves_icall_System_Threading_Interlocked_CompareExchange_Double (gdouble *location
 gint64 
 ves_icall_System_Threading_Interlocked_CompareExchange_Long (gint64 *location, gint64 value, gint64 comparand)
 {
-#if SIZEOF_VOID_P == 8
-	return (gint64)InterlockedCompareExchangePointer((gpointer *) location, (gpointer)value, (gpointer)comparand);
-#else
-	gint64 old;
-
-	mono_interlocked_lock ();
-	old = *location;
-	if (old == comparand)
-		*location = value;
-	mono_interlocked_unlock ();
-	
-	return old;
+#if SIZEOF_VOID_P == 4
+	if ((size_t)location & 0x7) {
+		gint64 old;
+		mono_interlocked_lock ();
+		old = *location;
+		if (old == comparand)
+			*location = value;
+		mono_interlocked_unlock ();
+		return old;
+	}
 #endif
+	return InterlockedCompareExchange64 (location, value, comparand);
 }
 
 MonoObject*
@@ -2531,7 +2530,11 @@ ves_icall_System_Threading_Thread_VolatileRead4 (void *ptr)
 gint64
 ves_icall_System_Threading_Thread_VolatileRead8 (void *ptr)
 {
+#if SIZEOF_VOID_P == 8
 	return *((volatile gint64 *) (ptr));
+#else
+	return InterlockedCompareExchange64 (ptr, 0, 0); /*Must ensure atomicity of the operation. */
+#endif
 }
 
 void *

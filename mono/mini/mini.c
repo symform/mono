@@ -3098,6 +3098,9 @@ mono_patch_info_hash (gconstpointer data)
 		return (ji->type << 8) | ji->data.table->table_size;
 	case MONO_PATCH_INFO_GSHAREDVT_METHOD:
 		return (ji->type << 8) | (gssize)ji->data.gsharedvt_method->method;
+	case MONO_PATCH_INFO_OBJC_SELECTOR_REF:
+		/* Hash on the selector name */
+		return g_str_hash (ji->data.target);
 	default:
 		printf ("info type: %d\n", ji->type);
 		mono_print_ji (ji); printf ("\n");
@@ -3513,6 +3516,10 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 	case MONO_PATCH_INFO_TLS_OFFSET:
 		target = GINT_TO_POINTER (mini_get_tls_offset (GPOINTER_TO_INT (patch_info->data.target)));
 		break;
+	case MONO_PATCH_INFO_OBJC_SELECTOR_REF: {
+		target = NULL;
+		break;
+	}
 	default:
 		g_assert_not_reached ();
 	}
