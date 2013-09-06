@@ -586,17 +586,19 @@ typedef int (STDCALL *InVTypeDelegate) (int a, simplestruct *ss, int b);
 LIBTEST_API int STDCALL 
 mono_test_marshal_in_struct (int a, simplestruct *ss, int b, InVTypeDelegate func)
 {
-	simplestruct *ss2;
+	simplestruct ss2;
 	int res;
 
-	memcpy (ss2, ss, sizeof (simplestruct));
+	memcpy (&ss2, ss, sizeof (simplestruct));
 
 	res = func (a, ss, b);
-	if (res)
+	if (res) {
+		printf ("mono_test_marshal_in_struct () failed: %d\n", res);
 		return 1;
+	}
 
 	/* Check that no modifications is made to the struct */
-	if (memcmp (ss, ss2, sizeof (simplestruct)) == 0)
+	if (ss2.a == ss->a && ss2.b == ss->b && ss2.c == ss->c && ss2.d == ss->d)
 		return 0;
 	else
 		return 1;
