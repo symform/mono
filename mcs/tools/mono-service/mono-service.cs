@@ -17,27 +17,45 @@ using Mono.Unix.Native;
 using System.ServiceProcess;
 using System.Threading;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 class MonoServiceRunner : MarshalByRefObject
 {
-	string assembly, name, logname;
+	static string output;
+
+	string assembly, name, logname, minThreads, maxThreads, priorityClass;
+	bool excludeSigusr;
 	string[] args;
-	
+
 	static void info (string prefix, string format, params object [] args)
 	{
-		Syscall.syslog (SyslogLevel.LOG_INFO, String.Format ("{0}: {1}", prefix, String.Format (format, args)));
+		var msg = String.Format ("{0}: {1}", prefix, String.Format (format, args));
+		switch (output){
+		case null: Syscall.syslog (SyslogLevel.LOG_NOTICE, msg); break;
+		case "stdout": Console.WriteLine (msg); break;
+		default: Console.Error.WriteLine (msg); break;
+       }
 	}
 	
 	static void error (string prefix, string format, params object [] args)
 	{
-		Syscall.syslog (SyslogLevel.LOG_ERR, String.Format ("{0}: {1}", prefix, String.Format (format, args)));
+		var msg = String.Format ("{0}: {1}", prefix, String.Format (format, args));
+		switch (output){
+		case null: Syscall.syslog (SyslogLevel.LOG_ERR, msg); break;
+		case "stdout": Console.WriteLine (msg); break;
+		default: Console.Error.WriteLine (msg); break;
+       }
 	}
 	
 	static void Usage ()
 	{
 		Console.Error.WriteLine (
 					 "Usage is:\n" +
-					 "mono-service [-d:DIRECTORY] [-l:LOCKFILE] [-n:NAME] [-m:LOGNAME] service.exe\n");
+					 "mono-service [-d:DIRECTORY] [-l:LOCKFILE] [-n:NAME] [-m:LOGNAME]\n" +
+					 "[--min-threads=MIN_WORKER_THREADS[:MIN_IO_THREADS]] [--max-threads=MAX_WORKER_THREADS[:MAX_IO_THREADS]]\n" +
+					 "[--output=OUTPUT] [--exclude-sigusr=BOOL] [--priority-class=PRIORITY_CLASS]" +
+					 "service.exe\n" +
+					 "\tPRIORITY_CLASS - The ProcessPriorityClass enum name to set the service's process PriorityClass to (e.g. 'Idle')");
 		Environment.Exit (1);
 	}
 
@@ -57,6 +75,11 @@ class MonoServiceRunner : MarshalByRefObject
 		string lockfile = null;
 		string name = null;
 		string logname = null;
+		string minThreads = null;
+		string maxThreads = null;
+		string output = null;
+		string priorityClass = null;
+		bool excludeSigusr = false;
 		var assebmlyArgs = new List<string>();
 
 		foreach (string s in args){
@@ -69,6 +92,18 @@ class MonoServiceRunner : MarshalByRefObject
 				case 'n': name = arg; break;
 				case 'm': logname = arg; break;
 				default: Usage (); break;
+				}
+			} else if (s.StartsWith("--") && s.IndexOf ("=") != -1){
+				string[] values = s.Split ('=');
+				string arg = values [1];
+
+				switch (values [0].Substring (2, values [0].Length - 2)){
+					case "min-threads": minThreads = arg; break;
+					case "max-threads": maxThreads = arg; break;
+					case "output": output = arg; break;
+					case "exclude-sigusr": excludeSigusr = (arg == "true"); break;
+					case "priority-class": priorityClass = arg; break;
+					default: Usage (); break;
 				}
 			} else {
 				if (assembly != null)
@@ -138,7 +173,8 @@ class MonoServiceRunner : MarshalByRefObject
 				true,
 				BindingFlags.Default,
 				null,
-				new object [] {assembly, name, logname, assebmlyArgs.ToArray()},
+				new object [] {assembly, name, logname, minThreads, maxThreads, priorityClass,
+					output, excludeSigusr, assebmlyArgs.ToArray()},
 				null, null, null) as MonoServiceRunner;
 				
 			if (rnr == null) {
@@ -154,11 +190,19 @@ class MonoServiceRunner : MarshalByRefObject
 		}
 	}
 	
-	public MonoServiceRunner (string assembly, string name, string logname, string[] args)
+	public MonoServiceRunner (string assembly, string name, string logname,
+		string minThreads, string maxThreads, string priorityClass,
+		string outputName, bool excludeSigusr, string[] args)
 	{
+		output = outputName;
+
 		this.assembly = assembly;
 		this.name = name;
 		this.logname = logname;
+		this.minThreads = minThreads;
+		this.maxThreads = maxThreads;
+		this.priorityClass = priorityClass;
+		this.excludeSigusr = excludeSigusr;
 		this.args = args;
 	}
 	
@@ -207,8 +251,13 @@ class MonoServiceRunner : MarshalByRefObject
 			return AppDomain.CurrentDomain.ExecuteAssembly (assembly, AppDomain.CurrentDomain.Evidence, args);
 			
 		} catch ( Exception ex ) {
+			var splitStrings = new string[] {Environment.NewLine};
 			for (Exception e = ex; e != null; e = e.InnerException) {
 				error (logname, e.Message);
+				foreach (var line in e.StackTrace.Split(splitStrings, StringSplitOptions.RemoveEmptyEntries))
+				{
+					error (logname, line);
+				}
 			}
 			
 			return 1;
@@ -220,12 +269,48 @@ class MonoServiceRunner : MarshalByRefObject
 	{
 		try {
 			ServiceBase service;
-	
+
 			if (services == null || services.Length == 0){
 				error (logname, "No services were registered by this service");
 				return;
 			}
-			
+
+			// Optionally adjust the service's thread limits.
+			if (this.maxThreads != null){
+			    int[] maxThreads = { 0, 0 };
+			    string[] limits = this.maxThreads.Split (':');
+			    if (limits.Length > 0)
+			        maxThreads[0] = Convert.ToInt32 (limits[0]);
+			    if (limits.Length > 1)
+			        maxThreads[1] = Convert.ToInt32 (limits[1]);
+			    else
+			        maxThreads[1] = maxThreads[0];
+
+			    if (!ThreadPool.SetMaxThreads(maxThreads[0], maxThreads[1])) {
+			        error (logname, "The value given for maxThreads is not valid: {0}:{1}", maxThreads[0], maxThreads[1]);
+			    }
+			}
+
+			if (this.minThreads != null){
+			    int[] minThreads = { 0, 0 };
+			    string[] limits = this.minThreads.Split (':');
+			    if (limits.Length > 0)
+			        minThreads[0] = Convert.ToInt32 (limits[0]);
+			    if (limits.Length > 1)
+			        minThreads[1] = Convert.ToInt32 (limits[1]);
+			    else
+			        minThreads[1] = minThreads[0];
+
+			    if (!ThreadPool.SetMinThreads(minThreads[0], minThreads[1])) {
+			        error (logname, "The value given for minThreads is not valid: {0}:{1}", minThreads[0], minThreads[1]);
+			    }
+			}
+
+			if (this.priorityClass != null){
+			    ProcessPriorityClass pri = (ProcessPriorityClass)Enum.Parse(typeof(ProcessPriorityClass), this.priorityClass);
+			    Process.GetCurrentProcess().PriorityClass = pri;
+			}
+
 			// Start up the service.
 			service = null;
 			
@@ -249,15 +334,26 @@ class MonoServiceRunner : MarshalByRefObject
 	
 			UnixSignal intr = new UnixSignal (Signum.SIGINT);
 			UnixSignal term = new UnixSignal (Signum.SIGTERM);
-			UnixSignal usr1 = new UnixSignal (Signum.SIGUSR1);
-			UnixSignal usr2 = new UnixSignal (Signum.SIGUSR2);
+			UnixSignal usr1 = null;
+			UnixSignal usr2 = null;
 
-			UnixSignal[] sigs = new UnixSignal[]{
-				intr,
-				term,
-				usr1,
-				usr2
-			};
+			UnixSignal[] sigs = null;
+			if (excludeSigusr){
+			    sigs = new UnixSignal[]{
+			        intr,
+			        term
+			    };
+			    info (logname, "Ignoring USR signals");
+			} else {
+			    usr1 = new UnixSignal (Signum.SIGUSR1);
+			    usr2 = new UnixSignal (Signum.SIGUSR2);
+			    sigs = new UnixSignal[]{
+			        intr,
+			        term,
+			        usr1,
+			        usr2
+			    };
+			}
 
 			for (bool running = true; running; ){
 				int idx = UnixSignal.WaitAny (sigs);
@@ -273,12 +369,12 @@ class MonoServiceRunner : MarshalByRefObject
 						       service.ServiceName, service.ExitCode);
 					running = false;
 				}
-				else if (usr1.IsSet && service.CanPauseAndContinue) {
+				else if (usr1 != null && usr1.IsSet && service.CanPauseAndContinue) {
 					usr1.Reset ();
 					info (logname, "Pausing service {0}", service.ServiceName);
 					call (service, "OnPause", null);
 				}
-				else if (usr2.IsSet && service.CanPauseAndContinue) {
+				else if (usr2 != null && usr2.IsSet && service.CanPauseAndContinue) {
 					usr2.Reset ();
 					info (logname, "Continuing service {0}", service.ServiceName);
 					call (service, "OnContinue", null);
