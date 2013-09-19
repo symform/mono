@@ -8880,13 +8880,14 @@ mono_marshal_get_native_wrapper (MonoMethod *method, gboolean check_exceptions, 
 		pinvoke = TRUE;
 
 	if (!piinfo->addr) {
-		if (pinvoke)
+		if (pinvoke) {
 			if (method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE)
 				exc_arg = "Method contains unsupported native code";
-			else
+			else if (!aot)
 				mono_lookup_pinvoke_call (method, &exc_class, &exc_arg);
-		else
+		} else {
 			piinfo->addr = mono_lookup_internal_call (method);
+		}
 	}
 
 	/* hack - redirect certain string constructors to CreateString */
@@ -11679,7 +11680,7 @@ ves_icall_System_Runtime_InteropServices_Marshal_copy_to_unmanaged (MonoArray *s
 	element_size = mono_array_element_size (src->obj.vtable->klass);
 
 	/* no references should be involved */
-	source_addr = mono_array_addr_with_size (src, element_size, start_index);
+	source_addr = mono_array_addr_with_size_fast (src, element_size, start_index);
 
 	memcpy (dest, source_addr, length * element_size);
 }
@@ -11708,7 +11709,7 @@ ves_icall_System_Runtime_InteropServices_Marshal_copy_from_unmanaged (gpointer s
 	element_size = mono_array_element_size (dest->obj.vtable->klass);
 	  
 	/* no references should be involved */
-	dest_addr = mono_array_addr_with_size (dest, element_size, start_index);
+	dest_addr = mono_array_addr_with_size_fast (dest, element_size, start_index);
 
 	memcpy (dest_addr, src, length * element_size);
 }
@@ -12156,7 +12157,7 @@ ves_icall_System_Runtime_InteropServices_Marshal_ReAllocCoTaskMem (gpointer ptr,
 void*
 ves_icall_System_Runtime_InteropServices_Marshal_UnsafeAddrOfPinnedArrayElement (MonoArray *arrayobj, int index)
 {
-	return mono_array_addr_with_size (arrayobj, mono_array_element_size (arrayobj->obj.vtable->klass), index);
+	return mono_array_addr_with_size_fast (arrayobj, mono_array_element_size (arrayobj->obj.vtable->klass), index);
 }
 
 MonoDelegate*
