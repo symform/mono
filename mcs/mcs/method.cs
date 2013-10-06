@@ -47,7 +47,7 @@ namespace Mono.CSharp {
 		protected ToplevelBlock block;
 		protected MethodSpec spec;
 
-		public MethodCore (TypeDefinition parent, FullNamedExpression type, Modifiers mod, Modifiers allowed_mod,
+		protected MethodCore (TypeDefinition parent, FullNamedExpression type, Modifiers mod, Modifiers allowed_mod,
 			MemberName name, Attributes attrs, ParametersCompiled parameters)
 			: base (parent, type, mod, allowed_mod, name, attrs)
 		{
@@ -685,6 +685,8 @@ namespace Mono.CSharp {
 				Module.PredefinedAttributes.CompilerGenerated.EmitAttribute (MethodBuilder);
 			if ((ModFlags & Modifiers.DEBUGGER_HIDDEN) != 0)
 				Module.PredefinedAttributes.DebuggerHidden.EmitAttribute (MethodBuilder);
+			if ((ModFlags & Modifiers.DEBUGGER_STEP_THROUGH) != 0)
+				Module.PredefinedAttributes.DebuggerStepThrough.EmitAttribute (MethodBuilder);
 
 			if (ReturnType.BuiltinType == BuiltinTypeSpec.Type.Dynamic) {
 				return_attributes = new ReturnParameter (this, MethodBuilder, Location);
@@ -1232,7 +1234,7 @@ namespace Mono.CSharp {
 					}
 
 					block = (ToplevelBlock) block.ConvertToAsyncTask (this, Parent.PartialContainer, parameters, ReturnType, null, Location);
-					ModFlags |= Modifiers.DEBUGGER_HIDDEN;
+					ModFlags |= Modifiers.DEBUGGER_STEP_THROUGH;
 				}
 
 				if (Compiler.Settings.WriteMetadataOnly)
@@ -1403,7 +1405,7 @@ namespace Mono.CSharp {
 		Arguments argument_list;
 		MethodSpec base_ctor;
 
-		public ConstructorInitializer (Arguments argument_list, Location loc)
+		protected ConstructorInitializer (Arguments argument_list, Location loc)
 		{
 			this.argument_list = argument_list;
 			this.loc = loc;
@@ -2265,7 +2267,7 @@ namespace Mono.CSharp {
 
 		ReturnParameter return_attributes;
 
-		public AbstractPropertyEventMethod (InterfaceMemberBase member, string prefix, Attributes attrs, Location loc)
+		protected AbstractPropertyEventMethod (InterfaceMemberBase member, string prefix, Attributes attrs, Location loc)
 			: base (member.Parent, SetupName (prefix, member, loc), attrs)
 		{
 			this.prefix = prefix;

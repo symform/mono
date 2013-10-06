@@ -28,7 +28,7 @@ namespace Mono.CSharp {
 		/// <summary>
 		///   Resolves the statement, true means that all sub-statements
 		///   did resolve ok.
-		//  </summary>
+		///  </summary>
 		public virtual bool Resolve (BlockContext bc)
 		{
 			return true;
@@ -751,7 +751,7 @@ namespace Mono.CSharp {
 
 		public StatementList (Statement first, Statement second)
 		{
-			statements = new List<Statement> () { first, second };
+			statements = new List<Statement> { first, second };
 		}
 
 		#region Properties
@@ -2609,7 +2609,7 @@ namespace Mono.CSharp {
 							continue;
 
 						if (storey.HoistedThis == null) {
-							storey.AddCapturedThisField (ec);
+							storey.AddCapturedThisField (ec, null);
 						}
 
 						for (ExplicitBlock b = ref_block; b.AnonymousMethodStorey != storey; b = b.Parent.Explicit) {
@@ -2628,8 +2628,10 @@ namespace Mono.CSharp {
 											break;
 									}
 
+									// Needs to be in sync with AnonymousMethodBody::DoCreateMethodHost
 									if (s == null) {
-										b.AnonymousMethodStorey.AddCapturedThisField (ec);
+										var parent = storey == null || storey.Kind == MemberKind.Struct ? null : storey;
+										b.AnonymousMethodStorey.AddCapturedThisField (ec, parent);
 										break;
 									}
 								}
@@ -2664,7 +2666,7 @@ namespace Mono.CSharp {
 								}
 
 								if (parent_storey_block.AnonymousMethodStorey == null) {
-									pb.StateMachine.AddCapturedThisField (ec);
+									pb.StateMachine.AddCapturedThisField (ec, null);
 									b.HasCapturedThis = true;
 									continue;
 								}
@@ -3711,7 +3713,7 @@ namespace Mono.CSharp {
 				return true;
 			}
 
-			converted = c.ImplicitConversionRequired (rc, rc.Switch.SwitchType, loc);
+			converted = c.ImplicitConversionRequired (rc, rc.Switch.SwitchType);
 			return converted != null;
 		}
 
@@ -5126,7 +5128,7 @@ namespace Mono.CSharp {
 		{
 			LocalVariable pinned_string;
 
-			public StringEmitter (Expression expr, LocalVariable li, Location loc)
+			public StringEmitter (Expression expr, LocalVariable li)
 				: base (expr, li)
 			{
 			}
@@ -5249,7 +5251,7 @@ namespace Mono.CSharp {
 				// Case 2: string
 				//
 				if (initializer.Type.BuiltinType == BuiltinTypeSpec.Type.String) {
-					return new StringEmitter (initializer, li, loc).Resolve (bc);
+					return new StringEmitter (initializer, li).Resolve (bc);
 				}
 
 				// Case 3: fixed buffer
