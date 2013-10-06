@@ -884,11 +884,6 @@ namespace System.IO
 
 		// protected
 
-		~FileStream ()
-		{
-			Dispose (false);
-		}
-
 		protected override void Dispose (bool disposing)
 		{
 			Exception exc = null;
@@ -918,18 +913,6 @@ namespace System.IO
 			canseek = false;
 			access = 0;
 			
-			if (disposing && buf != null) {
-				if (buf.Length == DefaultBufferSize && buf_recycle == null) {
-					lock (buf_recycle_lock) {
-						if (buf_recycle == null) {
-							buf_recycle = buf;
-						}
-					}
-				}
-				
-				buf = null;
-				GC.SuppressFinalize (this);
-			}
 			if (exc != null)
 				throw exc;
 		}
@@ -1101,23 +1084,7 @@ namespace System.IO
 
 				size = Math.Max (size, 8);
 
-				//
-				// Instead of allocating a new default buffer use the
-				// last one if there is any available
-				//		
-				if (size <= DefaultBufferSize && buf_recycle != null) {
-					lock (buf_recycle_lock) {
-						if (buf_recycle != null) {
-							buf = buf_recycle;
-							buf_recycle = null;
-						}
-					}
-				}
-
-				if (buf == null)
-					buf = new byte [size];
-				else
-					Array.Clear (buf, 0, size);
+				buf = new byte [size];
 			}
 					
 			buf_size = size;
@@ -1140,10 +1107,6 @@ namespace System.IO
 		// fields
 
 		internal const int DefaultBufferSize = 4096;
-
-		// Input buffer ready for recycling				
-		static byte[] buf_recycle;
-		static readonly object buf_recycle_lock = new object ();
 
 		private byte [] buf;			// the buffer
 		private string name = "[Unknown]";	// name of file.
