@@ -882,11 +882,6 @@ namespace System.IO
 			}
 		}
 
-		~FileStream ()
-		{
-			Dispose (false);
-		}
-
 		// protected
 
 		~FileStream ()
@@ -918,11 +913,6 @@ namespace System.IO
 
 					handle = MonoIO.InvalidHandle;
 				}
-			}
-
-			if (disposing && buf != null) {
-				buf = null;
-				GC.SuppressFinalize (this);
 			}
 
 			canseek = false;
