@@ -2057,6 +2057,12 @@ namespace Mono.CSharp {
 				this.orig_expr = orig_expr;
 			}
 
+			public Expression OriginalExpression {
+				get {
+					return orig_expr;
+				}
+			}
+
 			public override Constant ConvertImplicitly (TypeSpec target_type)
 			{
 				Constant c = base.ConvertImplicitly (target_type);
@@ -6802,7 +6808,7 @@ namespace Mono.CSharp {
 			get { return null; }
 		}
 
-		public override void VerifyAssigned (ResolveContext rc)
+		public override void VerifyDefiniteAssignment (ResolveContext rc)
 		{
 		}
 	}
