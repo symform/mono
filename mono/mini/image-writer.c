@@ -108,12 +108,12 @@
 #define ALIGN_PTR_TO(ptr,align) (gpointer)((((gssize)(ptr)) + (align - 1)) & (~(align - 1)))
 #define ROUND_DOWN(VALUE,SIZE)	((VALUE) & ~((SIZE) - 1))
 
-#if defined(TARGET_AMD64) && !defined(HOST_WIN32)
+#if defined(TARGET_AMD64) && !defined(HOST_WIN32) && !defined(__APPLE__)
 #define USE_ELF_WRITER 1
 #define USE_ELF_RELA 1
 #endif
 
-#if defined(TARGET_X86) && !defined(TARGET_WIN32)
+#if defined(TARGET_X86) && !defined(TARGET_WIN32) && !defined(__APPLE__)
 #define USE_ELF_WRITER 1
 #endif
 
