@@ -317,6 +317,7 @@ static int stat_wbarrier_set_field = 0;
 static int stat_wbarrier_set_arrayref = 0;
 static int stat_wbarrier_arrayref_copy = 0;
 static int stat_wbarrier_generic_store = 0;
+static int stat_wbarrier_generic_store_atomic = 0;
 static int stat_wbarrier_set_root = 0;
 static int stat_wbarrier_value_copy = 0;
 static int stat_wbarrier_object_copy = 0;
@@ -2234,6 +2235,7 @@ init_stats (void)
 	mono_counters_register ("WBarrier set arrayref", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_set_arrayref);
 	mono_counters_register ("WBarrier arrayref copy", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_arrayref_copy);
 	mono_counters_register ("WBarrier generic store called", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_generic_store);
+	mono_counters_register ("WBarrier generic atomic store called", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_generic_store_atomic);
 	mono_counters_register ("WBarrier set root", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_set_root);
 	mono_counters_register ("WBarrier value copy", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_value_copy);
 	mono_counters_register ("WBarrier object copy", MONO_COUNTER_GC | MONO_COUNTER_INT, &stat_wbarrier_object_copy);
@@ -4041,7 +4043,7 @@ scan_thread_data (void *start_nursery, void *end_nursery, gboolean precise, Gray
 			conservatively_pin_objects_from ((void**)&info->ctx, (void**)&info->ctx + ARCH_NUM_REGS,
 				start_nursery, end_nursery, PIN_TYPE_STACK);
 #else
-			conservatively_pin_objects_from (&info->regs, &info->regs + ARCH_NUM_REGS,
+			conservatively_pin_objects_from ((void**)&info->regs, (void**)&info->regs + ARCH_NUM_REGS,
 					start_nursery, end_nursery, PIN_TYPE_STACK);
 #endif
 		}
@@ -4385,6 +4387,24 @@ mono_gc_wbarrier_generic_store (gpointer ptr, MonoObject* value)
 	*(void**)ptr = value;
 	if (ptr_in_nursery (value))
 		mono_gc_wbarrier_generic_nostore (ptr);
+	sgen_dummy_use (value);
+}
+
+/* Same as mono_gc_wbarrier_generic_store () but performs the store
+ * as an atomic operation with release semantics.
+ */
+void
+mono_gc_wbarrier_generic_store_atomic (gpointer ptr, MonoObject *value)
+{
+	HEAVY_STAT (++stat_wbarrier_generic_store_atomic);
+
+	SGEN_LOG (8, "Wbarrier atomic store at %p to %p (%s)", ptr, value, value ? safe_name (value) : "null");
+
+	InterlockedWritePointer (ptr, value);
+
+	if (ptr_in_nursery (value))
+		mono_gc_wbarrier_generic_nostore (ptr);
+
 	sgen_dummy_use (value);
 }
 
@@ -4862,6 +4882,19 @@ mono_gc_base_init (void)
 
 #ifndef HAVE_KW_THREAD
 	mono_native_tls_alloc (&thread_info_key, NULL);
+#if defined(__APPLE__) || defined (HOST_WIN32)
+	/* 
+	 * CEE_MONO_TLS requires the tls offset, not the key, so the code below only works on darwin,
+	 * where the two are the same.
+	 */
+	mono_tls_key_set_offset (TLS_KEY_SGEN_THREAD_INFO, thread_info_key);
+#endif
+#else
+	{
+		int tls_offset = -1;
+		MONO_THREAD_VAR_OFFSET (sgen_thread_info, tls_offset);
+		mono_tls_key_set_offset (TLS_KEY_SGEN_THREAD_INFO, tls_offset);
+	}
 #endif
 
 	/*

@@ -1220,12 +1220,7 @@ create_trampoline_code (MonoTrampolineType tramp_type)
 	guchar *code;
 
 	code = mono_arch_create_generic_trampoline (tramp_type, &info, FALSE);
-	if (info) {
-		mono_save_trampoline_xdebug_info (info);
-		if (mono_jit_map_is_enabled ())
-			mono_emit_jit_tramp (info->code, info->code_size, info->name);
-		mono_tramp_info_free (info);
-	}
+	mono_tramp_info_register (info);
 
 	return code;
 }
@@ -1349,13 +1344,7 @@ mono_create_generic_class_init_trampoline (void)
 			code = mono_get_addr_from_ftnptr (mono_aot_get_trampoline ("generic_class_init_trampoline"));
 		else {
 			code = mono_arch_create_generic_class_init_trampoline (&info, FALSE);
-
-			if (info) {
-				mono_save_trampoline_xdebug_info (info);
-				if (mono_jit_map_is_enabled ())
-					mono_emit_jit_tramp (info->code, info->code_size, info->name);
-				mono_tramp_info_free (info);
-			}
+			mono_tramp_info_register (info);
 		}
 	}
 
@@ -1517,9 +1506,6 @@ mono_create_rgctx_lazy_fetch_trampoline (guint32 offset)
 
 	gpointer tramp, ptr;
 
-	if (mono_aot_only)
-		return mono_aot_get_lazy_fetch_trampoline (offset);
-
 	mono_trampolines_lock ();
 	if (rgctx_lazy_fetch_trampoline_hash)
 		tramp = g_hash_table_lookup (rgctx_lazy_fetch_trampoline_hash, GUINT_TO_POINTER (offset));
@@ -1529,14 +1515,13 @@ mono_create_rgctx_lazy_fetch_trampoline (guint32 offset)
 	if (tramp)
 		return tramp;
 
-	tramp = mono_arch_create_rgctx_lazy_fetch_trampoline (offset, &info, FALSE);
-	if (info) {
-		mono_save_trampoline_xdebug_info (info);
-		if (mono_jit_map_is_enabled ())
-			mono_emit_jit_tramp (info->code, info->code_size, info->name);
-		mono_tramp_info_free (info);
+	if (mono_aot_only) {
+		ptr = mono_aot_get_lazy_fetch_trampoline (offset);
+	} else {
+		tramp = mono_arch_create_rgctx_lazy_fetch_trampoline (offset, &info, FALSE);
+		mono_tramp_info_register (info);
+		ptr = mono_create_ftnptr (mono_get_root_domain (), tramp);
 	}
-	ptr = mono_create_ftnptr (mono_get_root_domain (), tramp);
 
 	mono_trampolines_lock ();
 	if (!rgctx_lazy_fetch_trampoline_hash) {
@@ -1576,12 +1561,7 @@ mono_create_monitor_enter_trampoline (void)
 		MonoTrampInfo *info;
 
 		code = mono_arch_create_monitor_enter_trampoline (&info, FALSE);
-		if (info) {
-			mono_save_trampoline_xdebug_info (info);
-			if (mono_jit_map_is_enabled ())
-				mono_emit_jit_tramp (info->code, info->code_size, info->name);
-			mono_tramp_info_free (info);
-		}
+		mono_tramp_info_register (info);
 	}
 
 	mono_trampolines_unlock ();
@@ -1611,12 +1591,7 @@ mono_create_monitor_exit_trampoline (void)
 		MonoTrampInfo *info;
 
 		code = mono_arch_create_monitor_exit_trampoline (&info, FALSE);
-		if (info) {
-			mono_save_trampoline_xdebug_info (info);
-			if (mono_jit_map_is_enabled ())
-				mono_emit_jit_tramp (info->code, info->code_size, info->name);
-			mono_tramp_info_free (info);
-		}
+		mono_tramp_info_register (info);
 	}
 
 	mono_trampolines_unlock ();
@@ -1726,3 +1701,24 @@ mono_get_rgctx_fetch_trampoline_name (int slot)
 	return g_strdup_printf ("rgctx_fetch_trampoline_%s_%d", mrgctx ? "mrgctx" : "rgctx", index);
 }
 
+gpointer
+mini_get_nullified_class_init_trampoline (void)
+{
+	static gpointer nullified_class_init_trampoline;
+
+	if (!nullified_class_init_trampoline) {
+		gpointer tramp;
+		MonoTrampInfo *info;
+
+		if (mono_aot_only) {
+			tramp = mono_aot_get_trampoline ("nullified_class_init_trampoline");
+		} else {
+			tramp = mono_arch_get_nullified_class_init_trampoline (&info);
+			mono_tramp_info_register (info);
+		}
+		mono_memory_barrier ();
+		nullified_class_init_trampoline = tramp;
+	}
+
+	return nullified_class_init_trampoline;
+}

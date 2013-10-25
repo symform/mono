@@ -58,6 +58,7 @@
 #include <mono/utils/mono-tls.h>
 #include <mono/utils/mono-hwcap.h>
 #include <mono/utils/dtrace.h>
+#include <mono/utils/mono-signal-handler.h>
 
 #include "mini.h"
 #include "mini-llvm.h"
@@ -593,6 +594,22 @@ mono_emit_unwind_op (MonoCompile *cfg, int when, int tag, int reg, int val)
 	op->when = when;
 	
 	cfg->unwind_ops = g_slist_append_mempool (cfg->mempool, cfg->unwind_ops, op);
+	if (cfg->verbose_level > 1) {
+		switch (tag) {
+		case DW_CFA_def_cfa:
+			printf ("CFA: [%x] def_cfa: %s+0x%x\n", when, mono_arch_regname (reg), val);
+			break;
+		case DW_CFA_def_cfa_register:
+			printf ("CFA: [%x] def_cfa_reg: %s\n", when, mono_arch_regname (reg));
+			break;
+		case DW_CFA_def_cfa_offset:
+			printf ("CFA: [%x] def_cfa_offset: 0x%x\n", when, val);
+			break;
+		case DW_CFA_offset:
+			printf ("CFA: [%x] offset: %s at cfa-0x%x\n", when, mono_arch_regname (reg), -val);
+			break;
+		}
+	}
 }
 
 MonoJumpInfoToken *
@@ -651,12 +668,17 @@ mono_tramp_info_free (MonoTrampInfo *info)
 /*
  * mono_tramp_info_register:
  *
- * Remember INFO for use by mono_print_method_from_ip ().
+ * Remember INFO for use by xdebug, mono_print_method_from_ip (), jit maps, etc.
+ * INFO can be NULL.
+ * Frees INFO.
  */
 void
 mono_tramp_info_register (MonoTrampInfo *info)
 {
 	MonoTrampInfo *copy;
+
+	if (!info)
+		return;
 
 	copy = g_new0 (MonoTrampInfo, 1);
 	copy->code = info->code;
@@ -666,6 +688,13 @@ mono_tramp_info_register (MonoTrampInfo *info)
 	mono_loader_lock_if_inited ();
 	tramp_infos = g_slist_prepend (tramp_infos, copy);
 	mono_loader_unlock_if_inited ();
+
+	mono_save_trampoline_xdebug_info (info);
+
+	if (mono_jit_map_is_enabled ())
+		mono_emit_jit_tramp (info->code, info->code_size, info->name);
+
+	mono_tramp_info_free (info);
 }
 
 G_GNUC_UNUSED static void
@@ -2888,7 +2917,7 @@ mini_thread_cleanup (MonoInternalThread *thread)
 }
 
 int
-mini_get_tls_offset (MonoJitTlsKey key)
+mini_get_tls_offset (MonoTlsKey key)
 {
 	int offset;
 
@@ -2905,9 +2934,12 @@ mini_get_tls_offset (MonoJitTlsKey key)
 	case TLS_KEY_LMF:
 		offset = mono_get_lmf_tls_offset ();
 		break;
+	case TLS_KEY_LMF_ADDR:
+		offset = mono_get_lmf_addr_tls_offset ();
+		break;
 	default:
-		g_assert_not_reached ();
-		offset = -1;
+		offset = mono_tls_key_get_offset (key);
+		g_assert (offset != -1);
 		break;
 	}
 	return offset;
@@ -2932,21 +2964,25 @@ mono_create_tls_get_offset (MonoCompile *cfg, int offset)
 	return ins;
 }
 
-static MonoInst*
-mono_create_tls_get (MonoCompile *cfg, MonoJitTlsKey key)
+MonoInst*
+mono_create_tls_get (MonoCompile *cfg, MonoTlsKey key)
 {
 	/*
 	 * TLS offsets might be different at AOT time, so load them from a GOT slot and
 	 * use a different opcode.
 	 */
-	if (cfg->compile_aot && MONO_ARCH_HAVE_TLS_GET && ARCH_HAVE_TLS_GET_REG) {
-		MonoInst *ins, *c;
+	if (cfg->compile_aot) {
+		if (MONO_ARCH_HAVE_TLS_GET && ARCH_HAVE_TLS_GET_REG) {
+			MonoInst *ins, *c;
 
-		EMIT_NEW_TLS_OFFSETCONST (cfg, c, key);
-		MONO_INST_NEW (cfg, ins, OP_TLS_GET_REG);
-		ins->dreg = mono_alloc_preg (cfg);
-		ins->sreg1 = c->dreg;
-		return ins;
+			EMIT_NEW_TLS_OFFSETCONST (cfg, c, key);
+			MONO_INST_NEW (cfg, ins, OP_TLS_GET_REG);
+			ins->dreg = mono_alloc_preg (cfg);
+			ins->sreg1 = c->dreg;
+			return ins;
+		} else {
+			return NULL;
+		}
 	}
 
 	return mono_create_tls_get_offset (cfg, mini_get_tls_offset (key));
@@ -2985,6 +3021,20 @@ mono_add_patch_info (MonoCompile *cfg, int ip, MonoJumpInfoType type, gconstpoin
 
 	ji->ip.i = ip;
 	ji->type = type;
+	ji->data.target = target;
+	ji->next = cfg->patch_info;
+
+	cfg->patch_info = ji;
+}
+
+void
+mono_add_patch_info_rel (MonoCompile *cfg, int ip, MonoJumpInfoType type, gconstpointer target, int relocation)
+{
+	MonoJumpInfo *ji = mono_mempool_alloc (cfg->mempool, sizeof (MonoJumpInfo));
+
+	ji->ip.i = ip;
+	ji->type = type;
+	ji->relocation = relocation;
 	ji->data.target = target;
 	ji->next = cfg->patch_info;
 
@@ -6134,7 +6184,7 @@ mono_jit_compile_method (MonoMethod *method)
 	MonoException *ex = NULL;
 	gpointer code;
 
-	code = mono_jit_compile_method_with_opt (method, default_opt, &ex);
+	code = mono_jit_compile_method_with_opt (method, mono_get_optimizations_for_method (method, default_opt), &ex);
 	if (!code) {
 		g_assert (ex);
 		mono_raise_exception (ex);
@@ -6257,6 +6307,33 @@ mono_jit_find_compiled_method_with_jit_info (MonoDomain *domain, MonoMethod *met
 	return NULL;
 }
 
+gboolean mono_do_single_method_regression = FALSE;
+guint32 mono_single_method_regression_opt = 0;
+MonoMethod *mono_current_single_method = NULL;
+GSList *mono_single_method_list = NULL;
+GHashTable *mono_single_method_hash = NULL;
+
+guint32
+mono_get_optimizations_for_method (MonoMethod *method, guint32 default_opt)
+{
+	g_assert (method);
+
+	if (!mono_do_single_method_regression)
+		return default_opt;
+	if (!mono_current_single_method) {
+		if (!mono_single_method_hash)
+			mono_single_method_hash = g_hash_table_new (g_direct_hash, g_direct_equal);
+		if (!g_hash_table_lookup (mono_single_method_hash, method)) {
+			g_hash_table_insert (mono_single_method_hash, method, method);
+			mono_single_method_list = g_slist_prepend (mono_single_method_list, method);
+		}
+		return default_opt;
+	}
+	if (method == mono_current_single_method)
+		return mono_single_method_regression_opt;
+	return default_opt;
+}
+
 gpointer
 mono_jit_find_compiled_method (MonoDomain *domain, MonoMethod *method)
 {
@@ -6345,7 +6422,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 		if (callee) {
 			MonoException *jit_ex = NULL;
 
-			info->compiled_method = mono_jit_compile_method_with_opt (callee, default_opt, &jit_ex);
+			info->compiled_method = mono_jit_compile_method_with_opt (callee, mono_get_optimizations_for_method (callee, default_opt), &jit_ex);
 			if (!info->compiled_method) {
 				g_free (info);
 				g_assert (jit_ex);
@@ -6514,8 +6591,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 	return runtime_invoke (obj, params, exc, info->compiled_method);
 }
 
-void
-SIG_HANDLER_SIGNATURE (mono_sigfpe_signal_handler)
+SIG_HANDLER_FUNC (, mono_sigfpe_signal_handler)
 {
 	MonoException *exc = NULL;
 	MonoJitInfo *ji;
@@ -6549,8 +6625,7 @@ SIG_HANDLER_SIGNATURE (mono_sigfpe_signal_handler)
 	mono_arch_handle_exception (ctx, exc);
 }
 
-void
-SIG_HANDLER_SIGNATURE (mono_sigill_signal_handler)
+SIG_HANDLER_FUNC (, mono_sigill_signal_handler)
 {
 	MonoException *exc;
 	GET_CONTEXT;
@@ -6564,8 +6639,7 @@ SIG_HANDLER_SIGNATURE (mono_sigill_signal_handler)
 #define HAVE_SIG_INFO
 #endif
 
-void
-SIG_HANDLER_SIGNATURE (mono_sigsegv_signal_handler)
+SIG_HANDLER_FUNC (, mono_sigsegv_signal_handler)
 {
 	MonoJitInfo *ji;
 	MonoJitTlsData *jit_tls = mono_native_tls_get_value (mono_jit_tls_id);
@@ -6644,8 +6718,7 @@ SIG_HANDLER_SIGNATURE (mono_sigsegv_signal_handler)
 #endif
 }
 
-void
-SIG_HANDLER_SIGNATURE (mono_sigint_signal_handler)
+SIG_HANDLER_FUNC (, mono_sigint_signal_handler)
 {
 	MonoException *exc;
 	GET_CONTEXT;
@@ -6807,7 +6880,6 @@ mini_create_ftnptr (MonoDomain *domain, gpointer addr)
 	desc [0] = addr;
 	desc [1] = NULL;
 #	elif defined(__ppc64__) || defined(__powerpc64__)
-	gpointer *desc;
 
 	desc = mono_domain_alloc0 (domain, 3 * sizeof (gpointer));
 
@@ -7207,6 +7279,8 @@ mini_init (const char *filename, const char *runtime_version)
 	register_opcode_emulation (OP_LDIV_UN, "__emul_ldiv_un", "long long long", mono_lldiv_un, "mono_lldiv_un", FALSE);
 	register_opcode_emulation (OP_LREM, "__emul_lrem", "long long long", mono_llrem, "mono_llrem", FALSE);
 	register_opcode_emulation (OP_LREM_UN, "__emul_lrem_un", "long long long", mono_llrem_un, "mono_llrem_un", FALSE);
+#endif
+#if !defined(MONO_ARCH_NO_EMULATE_LONG_MUL_OPTS) || defined(MONO_ARCH_EMULATE_LONG_MUL_OVF_OPTS)
 	register_opcode_emulation (OP_LMUL_OVF_UN, "__emul_lmul_ovf_un", "long long long", mono_llmult_ovf_un, "mono_llmult_ovf_un", FALSE);
 	register_opcode_emulation (OP_LMUL_OVF, "__emul_lmul_ovf", "long long long", mono_llmult_ovf, "mono_llmult_ovf", FALSE);
 #endif
