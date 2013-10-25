@@ -235,15 +235,8 @@
         }
 #       define GC_TEST_AND_SET_DEFINED
       inline static void GC_clear(volatile unsigned int *addr) {
-		  /* Memory barrier */
-#if defined(__native_client__) || defined(HAVE_ARMV7)
-		  /* NaCl requires ARMv7 CPUs. */
-		  __asm__ __volatile__("dsb" : : : "memory");
-#elif defined(HAVE_ARMV6)
-		  __asm__ __volatile__ ("mcr p15, 0, %0, c7, c10, 5" : : "r" (0) : "memory");
-#else
-		  /* No barrier required on pre-v6. */
-#endif
+		  __sync_synchronize ();
+
 		  *(addr) = 0;
       }
 #     define GC_CLEAR_DEFINED
