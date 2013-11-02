@@ -28755,7 +28755,7 @@
   <test name="gtest-variance-11.cs">
     <type name="D">
       <method name="Int32 Main()" attrs="150">
-        <size>58</size>
+        <size>137</size>
       </method>
       <method name="Void .ctor()" attrs="6278">
         <size>7</size>
@@ -28764,6 +28764,15 @@
         <size>49</size>
       </method>
       <method name="Boolean Covariant[T](ICovariant`1[T], ICovariant`1[T])" attrs="150">
+        <size>49</size>
+      </method>
+      <method name="Boolean CovContCont[T](ICovariant`1[T], IContravariant`1[T], IContravariant`1[T])" attrs="150">
+        <size>49</size>
+      </method>
+      <method name="Boolean ContCovContCov[T](IContravariant`1[T], ICovariant`1[T], IContravariant`1[T], ICovariant`1[T])" attrs="150">
+        <size>49</size>
+      </method>
+      <method name="Boolean CovCovCont[T](ICovariant`1[T], ICovariant`1[T], IContravariant`1[T])" attrs="150">
         <size>49</size>
       </method>
     </type>
@@ -48228,7 +48237,7 @@
     </type>
     <type name="FooClass">
       <method name="Int32 Main()" attrs="150">
-        <size>70</size>
+        <size>77</size>
       </method>
       <method name="Void .ctor()" attrs="6278">
         <size>7</size>
@@ -60229,6 +60238,46 @@
     <type name="X+&lt;Main&gt;c__async3">
       <method name="Void MoveNext()" attrs="486">
         <size>160</size>
+      </method>
+      <method name="Void SetStateMachine(IAsyncStateMachine)" attrs="486">
+        <size>13</size>
+      </method>
+    </type>
+  </test>
+  <test name="test-async-53.cs">
+    <type name="Y">
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="X">
+      <method name="Void add_E(System.Action`2[System.Int32,System.String])" attrs="2182">
+        <size>42</size>
+      </method>
+      <method name="Void remove_E(System.Action`2[System.Int32,System.String])" attrs="2182">
+        <size>42</size>
+      </method>
+      <method name="Void Foo()" attrs="129">
+        <size>54</size>
+      </method>
+      <method name="Void Main()" attrs="150">
+        <size>14</size>
+      </method>
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="X+&lt;Foo&gt;c__AnonStorey1">
+      <method name="Void &lt;&gt;m__0(Int32, System.String)" attrs="131">
+        <size>35</size>
+      </method>
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="X+&lt;Foo&gt;c__AnonStorey1+&lt;Foo&gt;c__async0">
+      <method name="Void MoveNext()" attrs="486">
+        <size>44</size>
       </method>
       <method name="Void SetStateMachine(IAsyncStateMachine)" attrs="486">
         <size>13</size>

@@ -1004,7 +1004,7 @@ get_call_info (MonoGenericSharingContext *gsctx, MonoMemPool *mp, MonoMethodSign
 		case MONO_TYPE_VALUETYPE: {
 			guint32 tmp_gr = 0, tmp_fr = 0, tmp_stacksize = 0;
 
-			add_valuetype (gsctx, sig, &cinfo->ret, sig->ret, TRUE, &tmp_gr, &tmp_fr, &tmp_stacksize);
+			add_valuetype (gsctx, sig, &cinfo->ret, ret_type, TRUE, &tmp_gr, &tmp_fr, &tmp_stacksize);
 			if (cinfo->ret.storage == ArgOnStack) {
 				cinfo->vtype_retaddr = TRUE;
 				/* The caller passes the address where the value is stored */
@@ -1020,7 +1020,7 @@ get_call_info (MonoGenericSharingContext *gsctx, MonoMemPool *mp, MonoMethodSign
 		case MONO_TYPE_VOID:
 			break;
 		default:
-			g_error ("Can't handle as return value 0x%x", sig->ret->type);
+			g_error ("Can't handle as return value 0x%x", ret_type->type);
 		}
 	}
 
@@ -1208,11 +1208,13 @@ mono_amd64_tail_call_supported (MonoMethodSignature *caller_sig, MonoMethodSigna
 {
 	CallInfo *c1, *c2;
 	gboolean res;
+	MonoType *callee_ret;
 
 	c1 = get_call_info (NULL, NULL, caller_sig);
 	c2 = get_call_info (NULL, NULL, callee_sig);
 	res = c1->stack_usage >= c2->stack_usage;
-	if (callee_sig->ret && MONO_TYPE_ISSTRUCT (callee_sig->ret) && c2->ret.storage != ArgValuetypeInReg)
+	callee_ret = callee_sig->ret;
+	if (callee_ret && MONO_TYPE_ISSTRUCT (callee_ret) && c2->ret.storage != ArgValuetypeInReg)
 		/* An address on the callee's stack is passed as the first argument */
 		res = FALSE;
 
@@ -1608,6 +1610,7 @@ mono_arch_regalloc_cost (MonoCompile *cfg, MonoMethodVar *vmv)
 void
 mono_arch_fill_argument_info (MonoCompile *cfg)
 {
+	MonoType *sig_ret;
 	MonoMethodSignature *sig;
 	MonoMethodHeader *header;
 	MonoInst *ins;
@@ -1619,19 +1622,19 @@ mono_arch_fill_argument_info (MonoCompile *cfg)
 	sig = mono_method_signature (cfg->method);
 
 	cinfo = cfg->arch.cinfo;
-
+	sig_ret = sig->ret;
 	/*
 	 * Contrary to mono_arch_allocate_vars (), the information should describe
 	 * where the arguments are at the beginning of the method, not where they can be 
 	 * accessed during the execution of the method. The later makes no sense for the 
 	 * global register allocator, since a variable can be in more than one location.
 	 */
-	if (sig->ret->type != MONO_TYPE_VOID) {
+	if (sig_ret->type != MONO_TYPE_VOID) {
 		switch (cinfo->ret.storage) {
 		case ArgInIReg:
 		case ArgInFloatSSEReg:
 		case ArgInDoubleSSEReg:
-			if ((MONO_TYPE_ISSTRUCT (sig->ret) && !mono_class_from_mono_type (sig->ret)->enumtype) || ((sig->ret->type == MONO_TYPE_TYPEDBYREF) && cinfo->vtype_retaddr)) {
+			if ((MONO_TYPE_ISSTRUCT (sig_ret) && !mono_class_from_mono_type (sig_ret)->enumtype) || ((sig_ret->type == MONO_TYPE_TYPEDBYREF) && cinfo->vtype_retaddr)) {
 				cfg->vret_addr->opcode = OP_REGVAR;
 				cfg->vret_addr->inst_c0 = cinfo->ret.reg;
 			}
@@ -1686,6 +1689,7 @@ mono_arch_fill_argument_info (MonoCompile *cfg)
 void
 mono_arch_allocate_vars (MonoCompile *cfg)
 {
+	MonoType *sig_ret;
 	MonoMethodSignature *sig;
 	MonoMethodHeader *header;
 	MonoInst *ins;
@@ -1699,6 +1703,7 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 	sig = mono_method_signature (cfg->method);
 
 	cinfo = cfg->arch.cinfo;
+	sig_ret = sig->ret;
 
 	mono_arch_compute_omit_fp (cfg);
 
@@ -1740,12 +1745,12 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 			}
 	}
 
-	if (sig->ret->type != MONO_TYPE_VOID) {
+	if (sig_ret->type != MONO_TYPE_VOID) {
 		switch (cinfo->ret.storage) {
 		case ArgInIReg:
 		case ArgInFloatSSEReg:
 		case ArgInDoubleSSEReg:
-			if ((MONO_TYPE_ISSTRUCT (sig->ret) && !mono_class_from_mono_type (sig->ret)->enumtype) || ((sig->ret->type == MONO_TYPE_TYPEDBYREF) && cinfo->vtype_retaddr)) {
+			if ((MONO_TYPE_ISSTRUCT (sig_ret) && !mono_class_from_mono_type (sig_ret)->enumtype) || ((sig_ret->type == MONO_TYPE_TYPEDBYREF) && cinfo->vtype_retaddr)) {
 				if (cfg->globalra) {
 					cfg->vret_addr->opcode = OP_REGVAR;
 					cfg->vret_addr->inst_c0 = cinfo->ret.reg;
@@ -2136,10 +2141,10 @@ mono_arch_get_llvm_call_info (MonoCompile *cfg, MonoMethodSignature *sig)
 	ArgInfo *ainfo;
 	int j;
 	LLVMCallInfo *linfo;
-	MonoType *t;
+	MonoType *t, *sig_ret;
 
 	n = sig->param_count + sig->hasthis;
-
+	sig_ret = sig->ret;
 	cinfo = get_call_info (cfg->generic_sharing_context, cfg->mempool, sig);
 
 	linfo = mono_mempool_alloc0 (cfg->mempool, sizeof (LLVMCallInfo) + (sizeof (LLVMArgInfo) * n));
@@ -2162,7 +2167,7 @@ mono_arch_get_llvm_call_info (MonoCompile *cfg, MonoMethodSignature *sig)
 			linfo->ret.pair_storage [j] = arg_storage_to_llvm_arg_storage (cfg, cinfo->ret.pair_storage [j]);
 	}
 
-	if (MONO_TYPE_ISSTRUCT (sig->ret) && cinfo->ret.storage == ArgInIReg) {
+	if (MONO_TYPE_ISSTRUCT (sig_ret) && cinfo->ret.storage == ArgInIReg) {
 		/* Vtype returned using a hidden argument */
 		linfo->ret.storage = LLVMArgVtypeRetAddr;
 		linfo->vret_arg_index = cinfo->vret_arg_index;
@@ -2226,6 +2231,7 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 {
 	MonoInst *arg, *in;
 	MonoMethodSignature *sig;
+	MonoType *sig_ret;
 	int i, n, stack_size;
 	CallInfo *cinfo;
 	ArgInfo *ainfo;
@@ -2236,6 +2242,8 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 	n = sig->param_count + sig->hasthis;
 
 	cinfo = get_call_info (cfg->generic_sharing_context, cfg->mempool, sig);
+
+	sig_ret = sig->ret;
 
 	if (COMPILE_LLVM (cfg)) {
 		/* We shouldn't be called in the llvm case */
@@ -2394,7 +2402,7 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (n == sig->sentinelpos))
 		emit_sig_cookie (cfg, call, cinfo);
 
-	if (sig->ret && MONO_TYPE_ISSTRUCT (sig->ret)) {
+	if (sig_ret && MONO_TYPE_ISSTRUCT (sig_ret)) {
 		MonoInst *vtarg;
 
 		if (cinfo->ret.storage == ArgValuetypeInReg) {
@@ -2494,6 +2502,7 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 		g_assert (!cfg->arch.no_pushes);
 
 		MONO_INST_NEW (cfg, load, OP_LDADDR);
+		cfg->has_indirection = TRUE;
 		load->inst_p0 = vtaddr;
 		vtaddr->flags |= MONO_INST_INDIRECT;
 		load->type = STACK_MP;
@@ -2833,8 +2842,9 @@ mono_arch_finish_dyn_call (MonoDynCallInfo *info, guint8 *buf)
 	MonoMethodSignature *sig = dinfo->sig;
 	guint8 *ret = ((DynCallArgs*)buf)->ret;
 	mgreg_t res = ((DynCallArgs*)buf)->res;
+	MonoType *sig_ret = mono_type_get_underlying_type (sig->ret);
 
-	switch (mono_type_get_underlying_type (sig->ret)->type) {
+	switch (sig_ret->type) {
 	case MONO_TYPE_VOID:
 		*(gpointer*)ret = NULL;
 		break;
@@ -2875,7 +2885,7 @@ mono_arch_finish_dyn_call (MonoDynCallInfo *info, guint8 *buf)
 		*(guint64*)ret = res;
 		break;
 	case MONO_TYPE_GENERICINST:
-		if (MONO_TYPE_IS_REFERENCE (sig->ret)) {
+		if (MONO_TYPE_IS_REFERENCE (sig_ret)) {
 			*(gpointer*)ret = GREG_TO_PTR(res);
 			break;
 		} else {
@@ -3633,6 +3643,39 @@ mono_amd64_emit_tls_get (guint8* code, int dreg, int tls_offset)
 		x86_prefix (code, X86_FS_PREFIX);
 		amd64_mov_reg_mem (code, dreg, tls_offset, 8);
 	}
+#endif
+	return code;
+}
+
+static guint8*
+emit_tls_get_reg (guint8* code, int dreg, int offset_reg)
+{
+#ifdef TARGET_OSX
+	// FIXME: tls_gs_offset can change too, do these when calculating the tls offset
+	if (dreg != offset_reg)
+		amd64_mov_reg_reg (code, dreg, offset_reg, sizeof (gpointer));
+	amd64_shift_reg_imm (code, X86_SHL, dreg, 3);
+	if (tls_gs_offset)
+		amd64_alu_reg_imm (code, X86_ADD, dreg, tls_gs_offset);
+	x86_prefix (code, X86_GS_PREFIX);
+	amd64_mov_reg_membase (code, dreg, dreg, 0, sizeof (gpointer));
+#elif defined(__linux__)
+	int tmpreg = -1;
+
+	if (dreg == offset_reg) {
+		/* Use a temporary reg by saving it to the redzone */
+		tmpreg = dreg == AMD64_RAX ? AMD64_RCX : AMD64_RAX;
+		amd64_mov_membase_reg (code, AMD64_RSP, -8, tmpreg, 8);
+		amd64_mov_reg_reg (code, tmpreg, offset_reg, sizeof (gpointer));
+		offset_reg = tmpreg;
+	}
+	x86_prefix (code, X86_FS_PREFIX);
+	amd64_mov_reg_mem (code, dreg, 0, 8);
+	amd64_mov_reg_memindex (code, dreg, dreg, 0, offset_reg, 0, 8);
+	if (tmpreg != -1)
+		amd64_mov_reg_membase (code, tmpreg, AMD64_RSP, -8, 8);
+#else
+	g_assert_not_reached ();
 #endif
 	return code;
 }
@@ -5564,18 +5607,8 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_TLS_GET_REG:
-#ifdef TARGET_OSX
-			// FIXME: tls_gs_offset can change too, do these when calculating the tls offset
-			if (ins->dreg != ins->sreg1)
-				amd64_mov_reg_reg (code, ins->dreg, ins->sreg1, sizeof (gpointer));
-			amd64_shift_reg_imm (code, X86_SHL, ins->dreg, 3);
-			if (tls_gs_offset)
-				amd64_alu_reg_imm (code, X86_ADD, ins->dreg, tls_gs_offset);
-			x86_prefix (code, X86_GS_PREFIX);
-			amd64_mov_reg_membase (code, ins->dreg, ins->dreg, 0, sizeof (gpointer));
-#else
-			g_assert_not_reached ();
-#endif
+			code = emit_tls_get_reg (code, ins->dreg, ins->sreg1);
+			break;
 			break;
 		case OP_MEMORY_BARRIER: {
 			switch (ins->backend.memory_barrier_kind) {
@@ -8359,12 +8392,7 @@ mono_arch_context_get_int_reg (MonoContext *ctx, int reg)
 	case AMD64_RBP: return ctx->rbp;
 	case AMD64_RSP: return ctx->rsp;
 	default:
-		if (reg < 8)
-			return _CTX_REG (ctx, rax, reg);
-		else if (reg >= 12)
-			return _CTX_REG (ctx, r12, reg - 12);
-		else
-			g_assert_not_reached ();
+		return _CTX_REG (ctx, rax, reg);
 	}
 }
 
@@ -8388,12 +8416,7 @@ mono_arch_context_set_int_reg (MonoContext *ctx, int reg, mgreg_t val)
 		ctx->rsp = val;
 		break;
 	default:
-		if (reg < 8)
-			_CTX_REG (ctx, rax, reg) = val;
-		else if (reg >= 12)
-			_CTX_REG (ctx, r12, reg - 12) = val;
-		else
-			g_assert_not_reached ();
+		_CTX_REG (ctx, rax, reg) = val;
 	}
 }
 

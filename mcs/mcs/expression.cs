@@ -3749,7 +3749,7 @@ namespace Mono.CSharp
 			TypeSpec result_type;
 			if (left.Type == right.Type) {
 				var c = right as EnumConstant;
-				if (c != null && c.IsZeroInteger) {
+				if (c != null && c.IsZeroInteger && !right.Type.IsEnum) {
 					//
 					// LAMESPEC: This is quite unexpected for expression E - 0 the return type is
 					// E which is not what expressions E - 1 or 0 - E return
@@ -6014,7 +6014,17 @@ namespace Mono.CSharp
 
 			var emg = MethodGroup as ExtensionMethodGroupExpr;
 			if (emg != null) {
-				return MethodGroupExpr.CreatePredefined (candidate, candidate.DeclaringType, MethodGroup.Location);
+				var mg = MethodGroupExpr.CreatePredefined (candidate, candidate.DeclaringType, MethodGroup.Location);
+				if (candidate.IsGeneric) {
+					var targs = new TypeExpression [candidate.Arity];
+					for (int i = 0; i < targs.Length; ++i) {
+						targs[i] = new TypeExpression (candidate.TypeArguments[i], MethodGroup.Location);
+					}
+
+					mg.SetTypeArguments (null, new TypeArguments (targs));
+				}
+
+				return mg;
 			}
 
 			return MethodGroup;
