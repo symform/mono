@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 #AC_PREREQ([2.62])
 
-AC_INIT(mono, [3.2.5],
+AC_INIT(mono, [3.2.7],
         [http://bugzilla.xamarin.com/enter_bug.cgi?classification=Mono])
 
 AC_CONFIG_SRCDIR([README.md])
@@ -2146,6 +2146,7 @@ else
 	AC_CHECK_DECLS(InterlockedIncrement64, [], [], [[#include <windows.h>]])
 	AC_CHECK_DECLS(InterlockedAdd, [], [], [[#include <windows.h>]])
 	AC_CHECK_DECLS(InterlockedAdd64, [], [], [[#include <windows.h>]])
+	AC_CHECK_DECLS(__readfsdword, [], [], [[#include <windows.h>]])
 fi
 
 dnl socklen_t check
@@ -2426,7 +2427,7 @@ if test "x$enable_llvm" = "xyes"; then
    fi
    LLVM_LIBS="$LLVM_LDFLAGS $LLVM_LIBS -lstdc++"
 
-   expected_llvm_version="3.3svn-mono/2c9642d"
+   expected_llvm_version="3.4svn-mono-mono/e656cac"
 
    # Should be something like '2.6' or '2.7svn'
    llvm_version=`$LLVM_CONFIG --version`

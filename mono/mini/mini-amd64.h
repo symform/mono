@@ -159,16 +159,15 @@ struct sigcontext {
 
 struct MonoLMF {
 	/* 
-	 * If the lowest bit is set to 1, then this LMF has the rip field set. Otherwise,
+	 * If the lowest bit is set, then this LMF has the rip field set. Otherwise,
 	 * the rip field is not set, and the rsp field points to the stack location where
 	 * the caller ip is saved.
-	 * If the second lowest bit is set to 1, then this is a MonoLMFExt structure, and
+	 * If the second lowest bit is set, then this is a MonoLMFExt structure, and
 	 * the other fields are not valid.
+	 * If the third lowest bit is set, then this is a MonoLMFTramp structure.
 	 */
 	gpointer    previous_lmf;
 	gpointer    lmf_addr;
-	/* This is only set in trampoline LMF frames */
-	MonoMethod *method;
 #if defined(__default_codegen__) || defined(HOST_WIN32)
 	guint64     rip;
 #elif defined(__native_client_codegen__)
@@ -188,6 +187,12 @@ struct MonoLMF {
 	guint64     rsi;
 #endif
 };
+
+/* LMF structure used by the JIT trampolines */
+typedef struct {
+	struct MonoLMF lmf;
+	guint64 *regs;
+} MonoLMFTramp;
 
 typedef struct MonoCompileArch {
 	gint32 localloc_offset;
@@ -334,9 +339,7 @@ typedef struct MonoCompileArch {
 #define MONO_ARCH_HAVE_IS_INT_OVERFLOW 1
 
 #define MONO_ARCH_ENABLE_REGALLOC_IN_EH_BLOCKS 1
-#if !defined(__APPLE__)
 #define MONO_ARCH_ENABLE_MONO_LMF_VAR 1
-#endif
 #define MONO_ARCH_HAVE_INVALIDATE_METHOD 1
 #define MONO_ARCH_HAVE_CREATE_DELEGATE_TRAMPOLINE 1
 #define MONO_ARCH_HAVE_ATOMIC_ADD 1
