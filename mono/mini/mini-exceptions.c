@@ -2315,14 +2315,10 @@ mono_handle_native_sigsegv (int signal, void *ctx)
 	/* !jit_tls means the thread was not registered with the runtime */
 	if (jit_tls && mono_thread_internal_current ()) {
 		mono_runtime_printf_err ("Stacktrace:\n");
-		
+
 		mono_walk_stack (print_stack_frame_to_stderr, TRUE, NULL);
 	}
 
-	/* dump all managed threads */
-	mono_runtime_printf_err ("\nFull thread dump:\n");
-	mono_threads_dump_all (stderr);
-	
 #ifdef HAVE_BACKTRACE_SYMBOLS
  {
 	void *array [256];

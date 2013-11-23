@@ -3345,7 +3345,7 @@ print_stack_frame_to_string (MonoStackFrameInfo *frame, MonoContext *ctx, gpoint
 }
 
 static void
-print_thread_dump (MonoInternalThread *thread, MonoThreadInfo *info, FILE* file)
+print_thread_dump (MonoInternalThread *thread, MonoThreadInfo *info)
 {
 	GString* text = g_string_new (0);
 	char *name;
@@ -3362,8 +3362,6 @@ print_thread_dump (MonoInternalThread *thread, MonoThreadInfo *info, FILE* file)
 	else
 		g_string_append (text, "\n\"<unnamed thread>\"");
 
-	g_string_append_printf (text, " %p %x", mono_thread_info_get_tid (info), info->small_id);
-	
 #if 0
 /* This no longer works with remote unwinding */
 #ifndef HOST_WIN32
@@ -3376,14 +3374,14 @@ print_thread_dump (MonoInternalThread *thread, MonoThreadInfo *info, FILE* file)
 	mono_get_eh_callbacks ()->mono_walk_stack_with_state (print_stack_frame_to_string, &info->suspend_state, MONO_UNWIND_SIGNAL_SAFE, text);
 	mono_thread_info_resume (mono_thread_info_get_tid (info));
 
-	fprintf (file, "%s", text->str);
+	fprintf (stdout, "%s", text->str);
 
 #if PLATFORM_WIN32 && TARGET_WIN32 && _DEBUG
 	OutputDebugStringA(text->str);
 #endif
 
 	g_string_free (text, TRUE);
-	fflush (file);
+	fflush (stdout);
 }
 
 static void
@@ -3407,30 +3405,24 @@ dump_thread (gpointer key, gpointer value, gpointer user)
 	if (!info)
 		return;
 
-	print_thread_dump (thread, info, (FILE*)user);
-}
-
-void
-mono_threads_dump_all (FILE* file)
-{
-	/* 
-	 * Make a copy of the hashtable since we can't do anything with
-	 * threads while threads_mutex is held.
-	 */
-	mono_threads_lock ();
-	mono_g_hash_table_foreach (threads, dump_thread, file);
-	mono_threads_unlock ();
+	print_thread_dump (thread, info);
 }
 
 void
 mono_threads_perform_thread_dump (void)
 {
 	if (!thread_dump_requested)
-	 	return;
+		return;
 
 	printf ("Full thread dump:\n");
 
-	mono_threads_dump_all (stdout);
+	/* 
+	 * Make a copy of the hashtable since we can't do anything with
+	 * threads while threads_mutex is held.
+	 */
+	mono_threads_lock ();
+	mono_g_hash_table_foreach (threads, dump_thread, NULL);
+	mono_threads_unlock ();
 
 	thread_dump_requested = FALSE;
 }
