@@ -18524,6 +18524,40 @@
       </method>
     </type>
   </test>
+  <test name="gtest-600.cs">
+    <type name="A">
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="B">
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="Delta">
+      <method name="Void Test[U](ICharlie`1[U], U)" attrs="145">
+        <size>2</size>
+      </method>
+      <method name="Void World[U](U, IFoo`1[U])" attrs="134">
+        <size>2</size>
+      </method>
+      <method name="Void Test(Foo)" attrs="134">
+        <size>14</size>
+      </method>
+      <method name="Void Main()" attrs="145">
+        <size>32</size>
+      </method>
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+    <type name="Foo">
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+  </test>
   <test name="gtest-anontype-01.cs">
     <type name="Test">
       <method name="Int32 Main()" attrs="150">
@@ -48527,6 +48561,42 @@
     <type name="C.Test">
       <method name="Void Main()" attrs="150">
         <size>2</size>
+      </method>
+      <method name="Void .ctor()" attrs="6278">
+        <size>7</size>
+      </method>
+    </type>
+  </test>
+  <test name="test-882.cs">
+    <type name="MyUInt32">
+      <method name="UInt32 op_Implicit(MyUInt32)" attrs="2198">
+        <size>15</size>
+      </method>
+      <method name="Int64 op_Implicit(MyUInt32)" attrs="2198">
+        <size>7</size>
+      </method>
+      <method name="MyUInt32 op_Implicit(UInt32)" attrs="2198">
+        <size>15</size>
+      </method>
+      <method name="MyUInt32 op_Implicit(Int64)" attrs="2198">
+        <size>7</size>
+      </method>
+      <method name="Void .ctor(UInt32)" attrs="6278">
+        <size>15</size>
+      </method>
+    </type>
+    <type name="Test">
+      <method name="MyUInt32 test1(MyUInt32)" attrs="145">
+        <size>25</size>
+      </method>
+      <method name="MyUInt32 test2(MyUInt32)" attrs="145">
+        <size>25</size>
+      </method>
+      <method name="MyUInt32 test3(MyUInt32)" attrs="145">
+        <size>25</size>
+      </method>
+      <method name="Int32 Main()" attrs="150">
+        <size>109</size>
       </method>
       <method name="Void .ctor()" attrs="6278">
         <size>7</size>
