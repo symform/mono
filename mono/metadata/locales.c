@@ -306,6 +306,28 @@ construct_region (MonoRegionInfo *this, const RegionInfoEntry *ri)
 	return TRUE;
 }
 
+static gboolean
+construct_culture_from_specific_name (MonoCultureInfo *ci, gchar *name)
+{
+	const CultureInfoEntry *entry;
+	const CultureInfoNameEntry *ne;
+
+	MONO_ARCH_SAVE_REGS;
+
+	ne = mono_binary_search (name, culture_name_entries, NUM_CULTURE_ENTRIES,
+			sizeof (CultureInfoNameEntry), culture_name_locator);
+
+	if (ne == NULL)
+		return FALSE;
+
+	entry = &culture_entries [ne->culture_entry_index];
+
+	if (entry)
+		return construct_culture (ci, entry);
+	else
+		return FALSE;
+}
+
 static const CultureInfoEntry*
 culture_info_entry_from_lcid (int lcid)
 {
@@ -466,22 +488,22 @@ get_current_locale_name (void)
 	return ret;
 }
 
-MonoString*
-ves_icall_System_Globalization_CultureInfo_get_current_locale_name (void)
+MonoBoolean
+ves_icall_System_Globalization_CultureInfo_construct_internal_locale_from_current_locale (MonoCultureInfo *ci)
 {
 	gchar *locale;
-	MonoString* ret;
-	MonoDomain *domain;
+	gboolean ret;
 
 	MONO_ARCH_SAVE_REGS;
 
 	locale = get_current_locale_name ();
 	if (locale == NULL)
-		return NULL;
+		return FALSE;
 
-	domain = mono_domain_get ();
-	ret = mono_string_new (domain, locale);
+	ret = construct_culture_from_specific_name (ci, locale);
 	g_free (locale);
+	ci->is_read_only = TRUE;
+	ci->use_user_override = TRUE;
 
 	return ret;
 }
