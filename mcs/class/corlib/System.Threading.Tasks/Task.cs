@@ -330,18 +330,28 @@ namespace System.Threading.Tasks
 			ContinueWith (new TaskContinuation (continuation, options));
 		}
 		
-		internal void ContinueWith (IContinuation continuation)
+		internal bool ContinueWith (IContinuation continuation, bool canExecuteInline = true)
 		{
 			if (IsCompleted) {
+				if (!canExecuteInline)
+					return false;
+
 				continuation.Execute ();
-				return;
+				return true;
 			}
 			
 			continuations.Add (continuation);
 			
 			// Retry in case completion was achieved but event adding was too late
-			if (IsCompleted && continuations.Remove (continuation))
+			if (IsCompleted) {
+				continuations.Remove (continuation);
+				if (!canExecuteInline)
+					return false;
+
 				continuation.Execute ();
+			}
+
+			return true;
 		}
 
 		internal void RemoveContinuation (IContinuation continuation)
@@ -438,7 +448,7 @@ namespace System.Threading.Tasks
 			return true;
 		}
 
-		internal bool TrySetException (AggregateException aggregate)
+		internal bool TrySetException (AggregateException aggregate, bool cancellation)
 		{
 			if (IsCompleted)
 				return false;
@@ -450,8 +460,16 @@ namespace System.Threading.Tasks
 
 				return false;
 			}
-			
-			HandleGenericException (aggregate);
+
+			if (cancellation) {
+				ExceptionSlot.Exception = aggregate;
+				Thread.MemoryBarrier ();
+
+				CancelReal ();
+			} else {
+				HandleGenericException (aggregate);
+			}
+
 			return true;
 		}
 
@@ -1245,7 +1263,7 @@ namespace System.Threading.Tasks
 		
 		public AggregateException Exception {
 			get {
-				if (exSlot == null)
+				if (exSlot == null || !IsFaulted)
 					return null;
 				exSlot.Observed = true;
 				return exSlot.Exception;
@@ -1286,7 +1304,7 @@ namespace System.Threading.Tasks
 			}
 		}
 
-		TaskExceptionSlot ExceptionSlot {
+		internal TaskExceptionSlot ExceptionSlot {
 			get {
 				if (exSlot != null)
 					return exSlot;
