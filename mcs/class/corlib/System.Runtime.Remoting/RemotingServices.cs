@@ -796,7 +796,7 @@ namespace System.Runtime.Remoting
 			if (obj is CACD) {
 				CACD cad = (CACD) obj;
 				obj = cad.d;
-				CallContext.UpdateCurrentLogicalCallContext ((LogicalCallContext) cad.c);
+				CallContext.UpdateCurrentCallContext ((LogicalCallContext) cad.c);
 			}
 			return obj;
 		}
