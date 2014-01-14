@@ -3092,7 +3092,7 @@ void mono_thread_manage (void)
 		THREAD_DEBUG (g_message ("%s: wait->num is now %d", __func__, wait->num));
 		if(wait->num>0) {
 			/* Something to wait for */
-			wait_for_tids (wait, INFINITE);
+			wait_for_tids (wait, 5000);
 		}
 	} while (wait->num > 0);
 	
