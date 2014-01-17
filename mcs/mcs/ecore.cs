@@ -1058,7 +1058,7 @@ namespace Mono.CSharp {
 		//
 		// Converts `source' to an int, uint, long or ulong.
 		//
-		protected Expression ConvertExpressionToArrayIndex (ResolveContext ec, Expression source)
+		protected Expression ConvertExpressionToArrayIndex (ResolveContext ec, Expression source, bool pointerArray = false)
 		{
 			var btypes = ec.BuiltinTypes;
 
@@ -1084,6 +1084,9 @@ namespace Mono.CSharp {
 					return null;
 				}
 			}
+
+			if (pointerArray)
+				return converted;
 
 			//
 			// Only positive constants are allowed at compile time
@@ -6522,6 +6525,8 @@ namespace Mono.CSharp {
 
 				if (expr != this)
 					return expr.ResolveLValue (ec, right_side);
+			} else {
+				ResolveInstanceExpression (ec, right_side);
 			}
 
 			if (!ResolveSetter (ec))

@@ -86,6 +86,7 @@
 #include <mono/utils/mono-digest.h>
 #include <mono/utils/bsearch.h>
 #include <mono/utils/mono-mutex.h>
+#include <mono/utils/mono-threads.h>
 
 #if defined (HOST_WIN32)
 #include <windows.h>
@@ -927,10 +928,15 @@ ves_icall_System_Runtime_CompilerServices_RuntimeHelpers_SufficientExecutionStac
 	size_t stack_size;
 	/* later make this configurable and per-arch */
 	int min_size = 4096 * 4 * sizeof (void*);
-	mono_thread_get_stack_bounds (&stack_addr, &stack_size);
+	mono_thread_info_get_stack_bounds (&stack_addr, &stack_size);
 	/* if we have no info we are optimistic and assume there is enough room */
 	if (!stack_addr)
 		return TRUE;
+#ifdef HOST_WIN32
+	// FIXME: Windows dynamically extends the stack, so stack_addr might be close
+	// to the current sp
+	return TRUE;
+#endif
 	current = (guint8 *)&stack_addr;
 	if (current > stack_addr) {
 		if ((current - stack_addr) < min_size)
@@ -1553,9 +1559,6 @@ ves_icall_type_is_assignable_from (MonoReflectionType *type, MonoReflectionType 
 
 	klass = mono_class_from_mono_type (type->type);
 	klassc = mono_class_from_mono_type (c->type);
-
-	mono_class_init_or_throw (klass);
-	mono_class_init_or_throw (klassc);
 
 	if (type->type->byref ^ c->type->byref)
 		return FALSE;

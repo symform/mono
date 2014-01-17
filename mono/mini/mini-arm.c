@@ -845,7 +845,7 @@ mono_arch_init (void)
 	mono_aot_register_jit_icall ("mono_arm_throw_exception", mono_arm_throw_exception);
 	mono_aot_register_jit_icall ("mono_arm_throw_exception_by_token", mono_arm_throw_exception_by_token);
 	mono_aot_register_jit_icall ("mono_arm_resume_unwind", mono_arm_resume_unwind);
-#if defined(MONOTOUCH) || defined(MONO_EXTENSIONS)
+#if defined(MONO_GSHARING)
 	mono_aot_register_jit_icall ("mono_arm_start_gsharedvt_call", mono_arm_start_gsharedvt_call);
 #endif
 
@@ -2513,17 +2513,24 @@ dyn_call_supported (CallInfo *cinfo, MonoMethodSignature *sig)
 	}
 
 	for (i = 0; i < cinfo->nargs; ++i) {
-		switch (cinfo->args [i].storage) {
+		ArgInfo *ainfo = &cinfo->args [i];
+		int last_slot;
+
+		switch (ainfo->storage) {
 		case RegTypeGeneral:
 			break;
 		case RegTypeIRegPair:
 			break;
 		case RegTypeBase:
-			if (cinfo->args [i].offset >= (DYN_CALL_STACK_ARGS * sizeof (gpointer)))
+			if (ainfo->offset >= (DYN_CALL_STACK_ARGS * sizeof (gpointer)))
 				return FALSE;
 			break;
 		case RegTypeStructByVal:
-			if (cinfo->args [i].reg + cinfo->args [i].vtsize >= PARAM_REGS + DYN_CALL_STACK_ARGS)
+			if (ainfo->size == 0)
+				last_slot = PARAM_REGS + (ainfo->offset / 4) + ainfo->vtsize;
+			else
+				last_slot = ainfo->reg + ainfo->size + ainfo->vtsize;
+			if (last_slot >= PARAM_REGS + DYN_CALL_STACK_ARGS)
 				return FALSE;
 			break;
 		default:
@@ -5584,7 +5591,7 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 				if (arm_is_imm12 (prev_sp_offset + ainfo->offset)) {
 					ARM_LDR_IMM (code, inst->dreg, ARMREG_SP, (prev_sp_offset + ainfo->offset));
 				} else {
-					code = mono_arm_emit_load_imm (code, ARMREG_IP, inst->inst_offset);
+					code = mono_arm_emit_load_imm (code, ARMREG_IP, prev_sp_offset + ainfo->offset);
 					ARM_LDR_REG_REG (code, inst->dreg, ARMREG_SP, ARMREG_IP);
 				}
 			} else
@@ -5636,11 +5643,21 @@ mono_arch_emit_prolog (MonoCompile *cfg)
 					break;
 				}
 			} else if (ainfo->storage == RegTypeBaseGen) {
-				g_assert (arm_is_imm12 (prev_sp_offset + ainfo->offset));
-				g_assert (arm_is_imm12 (inst->inst_offset));
-				ARM_LDR_IMM (code, ARMREG_LR, ARMREG_SP, (prev_sp_offset + ainfo->offset));
-				ARM_STR_IMM (code, ARMREG_LR, inst->inst_basereg, inst->inst_offset + 4);
-				ARM_STR_IMM (code, ARMREG_R3, inst->inst_basereg, inst->inst_offset);
+				if (arm_is_imm12 (prev_sp_offset + ainfo->offset)) {
+					ARM_LDR_IMM (code, ARMREG_LR, ARMREG_SP, (prev_sp_offset + ainfo->offset));
+				} else {
+					code = mono_arm_emit_load_imm (code, ARMREG_IP, prev_sp_offset + ainfo->offset);
+					ARM_LDR_REG_REG (code, ARMREG_LR, ARMREG_SP, ARMREG_IP);
+				}
+				if (arm_is_imm12 (inst->inst_offset + 4)) {
+					ARM_STR_IMM (code, ARMREG_LR, inst->inst_basereg, inst->inst_offset + 4);
+					ARM_STR_IMM (code, ARMREG_R3, inst->inst_basereg, inst->inst_offset);
+				} else {
+					code = mono_arm_emit_load_imm (code, ARMREG_IP, inst->inst_offset + 4);
+					ARM_STR_REG_REG (code, ARMREG_LR, inst->inst_basereg, ARMREG_IP);
+					code = mono_arm_emit_load_imm (code, ARMREG_IP, inst->inst_offset);
+					ARM_STR_REG_REG (code, ARMREG_R3, inst->inst_basereg, ARMREG_IP);
+				}
 			} else if (ainfo->storage == RegTypeBase || ainfo->storage == RegTypeGSharedVtOnStack) {
 				if (arm_is_imm12 (prev_sp_offset + ainfo->offset)) {
 					ARM_LDR_IMM (code, ARMREG_LR, ARMREG_SP, (prev_sp_offset + ainfo->offset));
@@ -6861,7 +6878,7 @@ mono_arch_set_target (char *mtriple)
 		eabi_supported = TRUE;
 }
 
-#if defined(MONOTOUCH) || defined(MONO_EXTENSIONS)
+#if defined(MONO_GSHARING)
 
 #include "../../../mono-extensions/mono/mini/mini-arm-gsharedvt.c"
 

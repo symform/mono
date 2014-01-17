@@ -60,6 +60,7 @@
 #include <mono/utils/mono-hwcap.h>
 #include <mono/utils/dtrace.h>
 #include <mono/utils/mono-signal-handler.h>
+#include <mono/utils/mono-threads.h>
 
 #include "mini.h"
 #include "mini-llvm.h"
@@ -670,9 +671,9 @@ mono_tramp_info_register (MonoTrampInfo *info)
 	copy->code_size = info->code_size;
 	copy->name = g_strdup (info->name);
 
-	mono_loader_lock_if_inited ();
+	mono_jit_lock ();
 	tramp_infos = g_slist_prepend (tramp_infos, copy);
-	mono_loader_unlock_if_inited ();
+	mono_jit_unlock ();
 
 	mono_save_trampoline_xdebug_info (info);
 
@@ -2706,19 +2707,33 @@ mono_set_lmf (MonoLMF *lmf)
 static void
 mono_set_jit_tls (MonoJitTlsData *jit_tls)
 {
+	MonoThreadInfo *info;
+
 	mono_native_tls_set_value (mono_jit_tls_id, jit_tls);
 
 #ifdef MONO_HAVE_FAST_TLS
 	MONO_FAST_TLS_SET (mono_jit_tls, jit_tls);
 #endif
+
+	/* Save it into MonoThreadInfo so it can be accessed by mono_thread_state_init_from_handle () */
+	info = mono_thread_info_current ();
+	if (info)
+		mono_thread_info_tls_set (info, TLS_KEY_JIT_TLS, jit_tls);
 }
 
 static void
 mono_set_lmf_addr (gpointer lmf_addr)
 {
+	MonoThreadInfo *info;
+
 #ifdef MONO_HAVE_FAST_TLS
 	MONO_FAST_TLS_SET (mono_lmf_addr, lmf_addr);
 #endif
+
+	/* Save it into MonoThreadInfo so it can be accessed by mono_thread_state_init_from_handle () */
+	info = mono_thread_info_current ();
+	if (info)
+		mono_thread_info_tls_set (info, TLS_KEY_LMF_ADDR, lmf_addr);
 }
 
 /*
@@ -3023,7 +3038,7 @@ mono_get_lmf_addr_intrinsic (MonoCompile* cfg)
 void
 mono_add_patch_info (MonoCompile *cfg, int ip, MonoJumpInfoType type, gconstpointer target)
 {
-	MonoJumpInfo *ji = mono_mempool_alloc (cfg->mempool, sizeof (MonoJumpInfo));
+	MonoJumpInfo *ji = mono_mempool_alloc0 (cfg->mempool, sizeof (MonoJumpInfo));
 
 	ji->ip.i = ip;
 	ji->type = type;
@@ -3036,7 +3051,7 @@ mono_add_patch_info (MonoCompile *cfg, int ip, MonoJumpInfoType type, gconstpoin
 void
 mono_add_patch_info_rel (MonoCompile *cfg, int ip, MonoJumpInfoType type, gconstpointer target, int relocation)
 {
-	MonoJumpInfo *ji = mono_mempool_alloc (cfg->mempool, sizeof (MonoJumpInfo));
+	MonoJumpInfo *ji = mono_mempool_alloc0 (cfg->mempool, sizeof (MonoJumpInfo));
 
 	ji->ip.i = ip;
 	ji->type = type;
@@ -4823,15 +4838,14 @@ mini_init_gsctx (MonoGenericContext *context, MonoGenericSharingContext *gsctx)
  * @method: the method to compile
  * @opts: the optimization flags to use
  * @domain: the domain where the method will be compiled in
- * @run_cctors: whether we should run type ctors if possible
- * @compile_aot: whether this is an AOT compilation
+ * @flags: compilation flags
  * @parts: debug flag
  *
  * Returns: a MonoCompile* pointer. Caller must check the exception_type
  * field in the returned struct to see if compilation succeded.
  */
 MonoCompile*
-mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, gboolean run_cctors, gboolean compile_aot, int parts)
+mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts)
 {
 	MonoMethodHeader *header;
 	MonoMethodSignature *sig;
@@ -4843,6 +4857,9 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, gbool
 	gboolean try_generic_shared, try_llvm = FALSE;
 	MonoMethod *method_to_compile, *method_to_register;
 	gboolean method_is_gshared = FALSE;
+	gboolean run_cctors = (flags & JIT_FLAG_RUN_CCTORS) ? 1 : 0;
+	gboolean compile_aot = (flags & JIT_FLAG_AOT) ? 1 : 0;
+	gboolean full_aot = (flags & JIT_FLAG_FULL_AOT) ? 1 : 0;
 
 	InterlockedIncrement (&mono_jit_stats.methods_compiled);
 	if (mono_profiler_get_events () & MONO_PROFILE_JIT_COMPILATION)
@@ -4909,6 +4926,7 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, gbool
 	cfg->domain = domain;
 	cfg->verbose_level = mini_verbose;
 	cfg->compile_aot = compile_aot;
+	cfg->full_aot = full_aot;
 	cfg->skip_visibility = method->skip_visibility;
 	cfg->orig_method = method;
 	cfg->gen_seq_points = debug_options.gen_seq_points;
@@ -5689,7 +5707,7 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, gbool
 #else
 
 MonoCompile*
-mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, gboolean run_cctors, gboolean compile_aot, int parts)
+mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts)
 {
 	g_assert_not_reached ();
 	return NULL;
@@ -5934,7 +5952,7 @@ mono_jit_compile_method_inner (MonoMethod *method, MonoDomain *target_domain, in
 
 	jit_timer = g_timer_new ();
 
-	cfg = mini_method_compile (method, opt, target_domain, TRUE, FALSE, 0);
+	cfg = mini_method_compile (method, opt, target_domain, JIT_FLAG_RUN_CCTORS, 0);
 	prof_method = cfg->method;
 
 	g_timer_stop (jit_timer);
@@ -6525,7 +6543,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 			if (supported)
 				info->dyn_call_info = mono_arch_dyn_call_prepare (sig);
 
-			ret_type = mini_replace_type (sig->ret);
+			ret_type = sig->ret;
 			if (info->dyn_call_info) {
 				switch (ret_type->type) {
 				case MONO_TYPE_VOID:
@@ -6622,7 +6640,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 		if (sig->hasthis)
 			args [pindex ++] = &obj;
 		for (i = 0; i < sig->param_count; ++i) {
-			MonoType *t = mini_replace_type (sig->params [i]);
+			MonoType *t = sig->params [i];
 
 			if (t->byref) {
 				args [pindex ++] = &params [i];
@@ -7101,6 +7119,8 @@ mini_init (const char *filename, const char *runtime_version)
 	}
 #endif
 
+	InitializeCriticalSection (&jit_mutex);
+
 	/* Happens when using the embedding interface */
 	if (!default_opt_set)
 		default_opt = mono_parse_default_optimizations (NULL);
@@ -7109,8 +7129,6 @@ mini_init (const char *filename, const char *runtime_version)
 	if (mono_aot_only)
 		mono_set_generic_sharing_vt_supported (TRUE);
 #endif
-
-	InitializeCriticalSection (&jit_mutex);
 
 #ifdef MONO_HAVE_FAST_TLS
 	MONO_FAST_TLS_INIT (mono_jit_tls);
@@ -7266,10 +7284,10 @@ mini_init (const char *filename, const char *runtime_version)
 	/*Init arch tls information only after the metadata side is inited to make sure we see dynamic appdomain tls keys*/
 	mono_arch_finish_init ();
 
+	mono_icall_init ();
+
 	/* This must come after mono_init () in the aot-only case */
 	mono_exceptions_init ();
-
-	mono_icall_init ();
 
 	/* This should come after mono_init () too */
 	mini_gc_init ();
@@ -7838,7 +7856,7 @@ mono_arch_get_gsharedvt_trampoline (MonoTrampInfo **info, gboolean aot)
 
 #endif
 
-#if defined(MONO_ARCH_GSHAREDVT_SUPPORTED) && !defined(MONOTOUCH) && !defined(MONO_EXTENSIONS)
+#if defined(MONO_ARCH_GSHAREDVT_SUPPORTED) && !defined(MONO_GSHARING)
 
 gboolean
 mono_arch_gsharedvt_sig_supported (MonoMethodSignature *sig)
@@ -7958,5 +7976,6 @@ mono_jumptable_get_entry (guint8 *code_ptr)
 MonoType*
 mini_replace_type (MonoType *type)
 {
-	return mono_type_get_underlying_type (type);
+	type = mono_type_get_underlying_type (type);
+	return mini_native_type_replace_type (type);
 }

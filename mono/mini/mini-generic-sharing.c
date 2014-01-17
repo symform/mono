@@ -2550,6 +2550,8 @@ mini_get_basic_type_from_generic (MonoGenericSharingContext *gsctx, MonoType *ty
 MonoType*
 mini_type_get_underlying_type (MonoGenericSharingContext *gsctx, MonoType *type)
 {
+	type = mini_native_type_replace_type (type);
+
 	if (type->byref)
 		return &mono_defaults.int_class->byval_arg;
 	if (!type->byref && (type->type == MONO_TYPE_VAR || type->type == MONO_TYPE_MVAR) && mini_is_gsharedvt_type_gsctx (gsctx, type))
@@ -2699,7 +2701,14 @@ mini_class_is_generic_sharable (MonoClass *klass)
 	return (klass->generic_class && mono_generic_context_is_sharable (&klass->generic_class->context, FALSE));
 }
 
-#if defined(MONOTOUCH) || defined(MONO_EXTENSIONS)
+
+gboolean
+mini_is_gsharedvt_variable_klass (MonoCompile *cfg, MonoClass *klass)
+{
+	return mini_is_gsharedvt_variable_type (cfg, &klass->byval_arg);
+}
+
+#if defined(MONO_GSHARING)
 
 #include "../../../mono-extensions/mono/mini/mini-generic-sharing-gsharedvt.c"
 

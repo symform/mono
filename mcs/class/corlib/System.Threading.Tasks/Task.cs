@@ -182,6 +182,9 @@ namespace System.Threading.Tasks
 			if (IsContinuation)
 				throw new InvalidOperationException ("Start may not be called on a continuation task");
 
+			if (IsPromise)
+				throw new InvalidOperationException ("Start may not be called on a promise-style task");
+
 			SetupScheduler (scheduler);
 			Schedule ();
 		}
@@ -208,6 +211,9 @@ namespace System.Threading.Tasks
 			if (IsContinuation)
 				throw new InvalidOperationException ("RunSynchronously may not be called on a continuation task");
 
+			if (IsPromise)
+				throw new InvalidOperationException ("RunSynchronously may not be called on a promise-style task");
+
 			RunSynchronouslyCore (scheduler);
 		}
 
@@ -220,7 +226,9 @@ namespace System.Threading.Tasks
 				if (scheduler.RunInline (this, false))
 					return;
 			} catch (Exception inner) {
-				throw new TaskSchedulerException (inner);
+				var ex = new TaskSchedulerException (inner);
+				TrySetException (new AggregateException (ex), false, true);
+				throw ex;
 			}
 
 			Schedule ();
@@ -343,8 +351,7 @@ namespace System.Threading.Tasks
 			continuations.Add (continuation);
 			
 			// Retry in case completion was achieved but event adding was too late
-			if (IsCompleted) {
-				continuations.Remove (continuation);
+			if (IsCompleted && continuations.Remove (continuation)) {
 				if (!canExecuteInline)
 					return false;
 
@@ -448,7 +455,7 @@ namespace System.Threading.Tasks
 			return true;
 		}
 
-		internal bool TrySetException (AggregateException aggregate, bool cancellation)
+		internal bool TrySetException (AggregateException aggregate, bool cancellation, bool observed)
 		{
 			if (IsCompleted)
 				return false;
@@ -469,6 +476,9 @@ namespace System.Threading.Tasks
 			} else {
 				HandleGenericException (aggregate);
 			}
+
+			if (observed)
+				exSlot.Observed = true;
 
 			return true;
 		}
@@ -1346,6 +1356,12 @@ namespace System.Threading.Tasks
 		bool IsContinuation {
 			get {
 				return contAncestor != null;
+			}
+		}
+
+		bool IsPromise {
+			get {
+				return invoker == TaskActionInvoker.Promise;
 			}
 		}
 

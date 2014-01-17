@@ -657,7 +657,7 @@ namespace Mono.CSharp
 				return is_checked ? SLE.Expression.NegateChecked (expr) : SLE.Expression.Negate (expr);
 			case Operator.LogicalNot:
 				return SLE.Expression.Not (expr);
-#if NET_4_0 || MONODROID
+#if NET_4_0 || MOBILE_DYNAMIC
 			case Operator.OnesComplement:
 				return SLE.Expression.OnesComplement (expr);
 #endif
@@ -1340,7 +1340,7 @@ namespace Mono.CSharp
 		}
 
 
-#if NET_4_0 || MONODROID
+#if NET_4_0 || MOBILE_DYNAMIC
 		public override SLE.Expression MakeExpression (BuilderContext ctx)
 		{
 			var target = ((RuntimeValueExpression) expr).MetaObject.Expression;
@@ -1922,7 +1922,7 @@ namespace Mono.CSharp
 			temp_storage.Release (ec);
 		}
 
-#if (NET_4_0 || MONODROID) && !STATIC
+#if (NET_4_0 || MOBILE_DYNAMIC) && !STATIC
 		public override SLE.Expression MakeExpression (BuilderContext ctx)
 		{
 			return SLE.Expression.Default (type.GetMetaInfo ());
@@ -7421,7 +7421,7 @@ namespace Mono.CSharp
 			return data;
 		}
 
-#if NET_4_0 || MONODROID
+#if NET_4_0 || MOBILE_DYNAMIC
 		public override SLE.Expression MakeExpression (BuilderContext ctx)
 		{
 #if STATIC
@@ -9306,17 +9306,24 @@ namespace Mono.CSharp
 			return CreateExpressionFactoryCall (ec, "ArrayIndex", args);
 		}
 
-		Expression MakePointerAccess (ResolveContext ec, TypeSpec type)
+		Expression MakePointerAccess (ResolveContext rc, TypeSpec type)
 		{
 			if (Arguments.Count != 1){
-				ec.Report.Error (196, loc, "A pointer must be indexed by only one value");
+				rc.Report.Error (196, loc, "A pointer must be indexed by only one value");
 				return null;
 			}
 
-			if (Arguments [0] is NamedArgument)
-				Error_NamedArgument ((NamedArgument) Arguments[0], ec.Report);
+			var arg = Arguments[0];
+			if (arg is NamedArgument)
+				Error_NamedArgument ((NamedArgument) arg, rc.Report);
 
-			Expression p = new PointerArithmetic (Binary.Operator.Addition, Expr, Arguments [0].Expr.Resolve (ec), type, loc);
+			var index = arg.Expr.Resolve (rc);
+			if (index == null)
+				return null;
+
+			index = ConvertExpressionToArrayIndex (rc, index, true);
+
+			Expression p = new PointerArithmetic (Binary.Operator.Addition, Expr, index, type, loc);
 			return new Indirection (p, loc);
 		}
 		
@@ -9611,7 +9618,7 @@ namespace Mono.CSharp
 
 		public SLE.Expression MakeAssignExpression (BuilderContext ctx, Expression source)
 		{
-#if NET_4_0 || MONODROID
+#if NET_4_0 || MOBILE_DYNAMIC
 			return SLE.Expression.ArrayAccess (ea.Expr.MakeExpression (ctx), MakeExpressionArguments (ctx));
 #else
 			throw new NotImplementedException ();
@@ -9790,7 +9797,7 @@ namespace Mono.CSharp
 #else
 			var value = new[] { source.MakeExpression (ctx) };
 			var args = Arguments.MakeExpression (arguments, ctx).Concat (value);
-#if NET_4_0 || MONODROID
+#if NET_4_0 || MOBILE_DYNAMIC
 			return SLE.Expression.Block (
 					SLE.Expression.Call (InstanceExpression.MakeExpression (ctx), (MethodInfo) Setter.GetMetaInfo (), args),
 					value [0]);
@@ -9935,8 +9942,8 @@ namespace Mono.CSharp
 		{
 			base.Emit (ec);
 
-			var context_type = ec.CurrentType;
-			if (context_type.IsStruct) {
+			if (type == ec.Module.Compiler.BuiltinTypes.ValueType) {
+				var context_type = ec.CurrentType;
 				ec.Emit (OpCodes.Ldobj, context_type);
 				ec.Emit (OpCodes.Box, context_type);
 			}

@@ -206,10 +206,7 @@ __attribute__ ((noinline))
 			WrapperInfo *info = mono_marshal_get_wrapper_info (impl);
 
 			if (info && info->subtype == WRAPPER_SUBTYPE_GENERIC_ARRAY_HELPER) {
-				// FIXME: This needs a gsharedvt-out trampoline, since the caller uses the gsharedvt calling conv, but the
-				// wrapper is a normal non-generic method.
 				*need_rgctx_tramp = TRUE;
-				//g_assert_not_reached ();
 			}
 		}
 
@@ -290,10 +287,10 @@ mini_add_method_trampoline (MonoMethod *orig_method, MonoMethod *m, gpointer com
 	gpointer addr = compiled_method;
 	gboolean callee_gsharedvt, callee_array_helper;
 	MonoMethod *jmethod = NULL;
-	MonoJitInfo *ji = 
-		mini_jit_info_table_find (mono_domain_get (), mono_get_addr_from_ftnptr (compiled_method), NULL);
+	MonoJitInfo *ji;
 
-	// FIXME: This loads information from AOT
+	// FIXME: This loads information from AOT (perf problem)
+	ji = mini_jit_info_table_find (mono_domain_get (), mono_get_addr_from_ftnptr (compiled_method), NULL);
 	callee_gsharedvt = mini_jit_info_is_gsharedvt (ji);
 
 	callee_array_helper = FALSE;
@@ -357,7 +354,16 @@ mini_add_method_trampoline (MonoMethod *orig_method, MonoMethod *m, gpointer com
 		//printf ("IN: %s\n", mono_method_full_name (m, TRUE));
 	}
 
-	if (add_static_rgctx_tramp && !callee_array_helper)
+	if (callee_array_helper) {
+		add_static_rgctx_tramp = FALSE;
+		if (ji && ji->from_aot) {
+			/* In AOT mode, compiled_method points to one of the InternalArray methods in Array. */
+			if (mono_method_needs_static_rgctx_invoke (jinfo_get_method (ji), TRUE))
+				add_static_rgctx_tramp = TRUE;
+		}
+	}
+
+	if (add_static_rgctx_tramp)
 		addr = mono_create_static_rgctx_trampoline (m, addr);
 
 	return addr;
@@ -894,10 +900,11 @@ mono_class_init_trampoline (mgreg_t *regs, guint8 *code, MonoVTable *vtable, gui
 
 	mono_runtime_class_init (vtable);
 
-	if (plt_entry) {
-		mono_arch_nullify_plt_entry (plt_entry, regs);
-	} else {
-		mono_arch_nullify_class_init_trampoline (code, regs);
+	if (vtable->initialized) {
+		if (plt_entry)
+			mono_arch_nullify_plt_entry (plt_entry, regs);
+		else
+			mono_arch_nullify_class_init_trampoline (code, regs);
 	}
 }
 
@@ -1115,13 +1122,8 @@ mono_handler_block_guard_trampoline (mgreg_t *regs, guint8 *code, gpointer *tram
 		exc = mono_thread_resume_interruption ();
 
 	if (exc) {
-		static void (*restore_context) (MonoContext *);
-
-		if (!restore_context)
-			restore_context = mono_get_restore_context ();
-
 		mono_handle_exception (&ctx, exc);
-		restore_context (&ctx);
+		mono_restore_context (&ctx);
 	}
 
 	return resume_ip;

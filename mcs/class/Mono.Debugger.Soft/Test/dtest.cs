@@ -1467,8 +1467,8 @@ public class DebuggerTests
 		StackFrame frame = e.Thread.GetFrames () [0];
 
 		var locals = frame.Method.GetLocals ();
-		Assert.AreEqual (7, locals.Length);
-		for (int i = 0; i < 7; ++i) {
+		Assert.AreEqual (8, locals.Length);
+		for (int i = 0; i < 8; ++i) {
 			if (locals [i].Name == "args") {
 				Assert.IsTrue (locals [i].IsArg);
 				Assert.AreEqual ("String[]", locals [i].Type.Name);
@@ -1491,6 +1491,7 @@ public class DebuggerTests
 			} else if (locals [i].Name == "rs") {
 				Assert.IsTrue (locals [i].IsArg);
 				Assert.AreEqual ("String", locals [i].Type.Name);
+			} else if (locals [i].Name == "astruct") {
 			} else {
 				Assert.Fail ();
 			}
@@ -2085,6 +2086,18 @@ public class DebuggerTests
 		v = this_obj.InvokeMethod (e.Thread, m, null);
 		AssertValue (42, v);
 
+#if NET_4_5
+		// instance
+		m = t.GetMethod ("invoke_pass_ref");
+		var task = this_obj.InvokeMethodAsync (e.Thread, m, new Value [] { vm.RootDomain.CreateString ("ABC") });
+		AssertValue ("ABC", task.Result);
+
+		// static
+		m = t.GetMethod ("invoke_static_pass_ref");
+		task = t.InvokeMethodAsync (e.Thread, m, new Value [] { vm.RootDomain.CreateString ("ABC") });
+		AssertValue ("ABC", task.Result);
+#endif
+
 		// Argument checking
 		
 		// null thread
@@ -2391,6 +2404,14 @@ public class DebuggerTests
 		p = frame.Method.GetParameters ()[3];
 		frame.SetValue (p, vm.RootDomain.CreateString ("DEF2"));
 		AssertValue ("DEF2", frame.GetValue (p));
+
+		// byref struct
+		p = frame.Method.GetParameters ()[4];
+		var v = frame.GetValue (p) as StructMirror;
+		v ["i"] = vm.CreateValue (43);
+		frame.SetValue (p, v);
+		v = frame.GetValue (p) as StructMirror;
+		AssertValue (43, v ["i"]);
 
 		// argument checking
 
