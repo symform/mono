@@ -62,6 +62,7 @@ scripts_2_0 = \
 	gacutil2$(SCRIPT_SUFFIX)		\
 	certmgr$(SCRIPT_SUFFIX)			\
 	monop2$(SCRIPT_SUFFIX) 			\
+	mozroots$(SCRIPT_SUFFIX)		\
 	resgen2$(SCRIPT_SUFFIX)			\
 	wsdl2$(SCRIPT_SUFFIX)
 
@@ -88,7 +89,6 @@ scripts_4_0 = \
 	monolinker$(SCRIPT_SUFFIX)		\
 	mono-api-info$(SCRIPT_SUFFIX) 		\
 	mono-shlib-cop$(SCRIPT_SUFFIX) 		\
-	mozroots$(SCRIPT_SUFFIX)		\
 	permview$(SCRIPT_SUFFIX)		\
 	pdb2mdb$(SCRIPT_SUFFIX)			\
 	xsd$(SCRIPT_SUFFIX)			\
