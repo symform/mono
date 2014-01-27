@@ -4946,11 +4946,17 @@ encode_patch (MonoAotCompile *acfg, MonoJumpInfo *patch_info, guint8 *buf, guint
 	case MONO_PATCH_INFO_CLASS:
 	case MONO_PATCH_INFO_IID:
 	case MONO_PATCH_INFO_ADJUSTED_IID:
+	case MONO_PATCH_INFO_CLASS_INIT:
 		encode_klass_ref (acfg, patch_info->data.klass, p, &p);
 		break;
-	case MONO_PATCH_INFO_CLASS_INIT:
 	case MONO_PATCH_INFO_DELEGATE_TRAMPOLINE:
-		encode_klass_ref (acfg, patch_info->data.klass, p, &p);
+		encode_klass_ref (acfg, patch_info->data.del_tramp->klass, p, &p);
+		if (patch_info->data.del_tramp->method) {
+			encode_value (1, p, &p);
+			encode_method_ref (acfg, patch_info->data.del_tramp->method, p, &p);
+		} else {
+			encode_value (0, p, &p);
+		}
 		break;
 	case MONO_PATCH_INFO_FIELD:
 	case MONO_PATCH_INFO_SFLDA:
@@ -5014,9 +5020,9 @@ encode_patch (MonoAotCompile *acfg, MonoJumpInfo *patch_info, guint8 *buf, guint
 		int i;
 
 		encode_method_ref (acfg, info->method, p, &p);
-		encode_value (info->entries->len, p, &p);
-		for (i = 0; i < info->entries->len; ++i) {
-			MonoRuntimeGenericContextInfoTemplate *template = g_ptr_array_index (info->entries, i);
+		encode_value (info->num_entries, p, &p);
+		for (i = 0; i < info->num_entries; ++i) {
+			MonoRuntimeGenericContextInfoTemplate *template = &info->entries [i];
 
 			encode_value (template->info_type, p, &p);
 			switch (mini_rgctx_info_type_to_patch_info_type (template->info_type)) {
