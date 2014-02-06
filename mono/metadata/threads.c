@@ -323,9 +323,31 @@ static gboolean handle_remove(MonoInternalThread *thread)
 	return ret;
 }
 
+static void ensure_synch_cs_set (MonoInternalThread *thread)
+{
+	CRITICAL_SECTION *synch_cs;
+
+	if (thread->synch_cs != NULL) {
+		return;
+	}
+
+	synch_cs = g_new0 (CRITICAL_SECTION, 1);
+	InitializeCriticalSection (synch_cs);
+
+	if (InterlockedCompareExchangePointer ((gpointer *)&thread->synch_cs,
+					       synch_cs, NULL) != NULL) {
+		/* Another thread must have installed this CS */
+		DeleteCriticalSection (synch_cs);
+		g_free (synch_cs);
+	}
+}
+
 static inline void
 lock_thread (MonoInternalThread *thread)
 {
+	if (!thread->synch_cs)
+		ensure_synch_cs_set (thread);
+
 	g_assert (thread->synch_cs);
 	EnterCriticalSection (thread->synch_cs);
 }
@@ -857,17 +879,10 @@ mono_thread_attach_full (MonoDomain *domain, gboolean force_attach)
 
 	thread = create_internal_thread ();
 
-	thread_handle = GetCurrentThread ();
+	thread_handle = mono_thread_info_open_handle ();
 	g_assert (thread_handle);
 
 	tid=GetCurrentThreadId ();
-
-	/* 
-	 * The handle returned by GetCurrentThread () is a pseudo handle, so it can't be used to
-	 * refer to the thread from other threads for things like aborting.
-	 */
-	DuplicateHandle (GetCurrentProcess (), thread_handle, GetCurrentProcess (), &thread_handle, 
-					 THREAD_ALL_ACCESS, TRUE, 0);
 
 	thread->handle=thread_handle;
 	thread->tid=tid;
@@ -954,7 +969,7 @@ mono_thread_exit ()
 	/* we could add a callback here for embedders to use. */
 	if (mono_thread_get_main () && (thread == mono_thread_get_main ()->internal_thread))
 		exit (mono_environment_exitcode_get ());
-	ExitThread (-1);
+	mono_thread_info_exit ();
 }
 
 void
@@ -2790,7 +2805,7 @@ mono_threads_set_shutting_down (void)
 		mono_domain_unset ();
 
 		/* Wake up other threads potentially waiting for us */
-		ExitThread (0);
+		mono_thread_info_exit ();
 	} else {
 		shutting_down = TRUE;
 
@@ -4021,7 +4036,9 @@ static MonoException* mono_thread_execute_interruption (MonoInternalThread *thre
 	/* MonoThread::interruption_requested can only be changed with atomics */
 	if (InterlockedCompareExchange (&thread->interruption_requested, FALSE, TRUE)) {
 		/* this will consume pending APC calls */
+#ifdef HOST_WIN32
 		WaitForSingleObjectEx (GetCurrentThread(), 0, TRUE);
+#endif
 		InterlockedDecrement (&thread_interruption_requested);
 #ifndef HOST_WIN32
 		/* Clear the interrupted flag of the thread so it can wait again */

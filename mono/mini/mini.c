@@ -683,6 +683,19 @@ mono_tramp_info_register (MonoTrampInfo *info)
 	mono_tramp_info_free (info);
 }
 
+static void
+mono_tramp_info_cleanup (void)
+{
+	GSList *l;
+
+	for (l = tramp_infos; l; l = l->next) {
+		MonoTrampInfo *info = l->data;
+
+		mono_tramp_info_free (info);
+	}
+	g_slist_free (tramp_infos);
+}
+
 G_GNUC_UNUSED static void
 break_count (void)
 {
@@ -3207,6 +3220,8 @@ mono_patch_info_hash (gconstpointer data)
 	case MONO_PATCH_INFO_MONITOR_EXIT:
 	case MONO_PATCH_INFO_CASTCLASS_CACHE:
 	case MONO_PATCH_INFO_GOT_OFFSET:
+	case MONO_PATCH_INFO_NURSERY_START_SHIFTED:
+	case MONO_PATCH_INFO_NURSERY_SHIFT:
 		return (ji->type << 8);
 	case MONO_PATCH_INFO_SWITCH:
 		return (ji->type << 8) | ji->data.table->table_size;
@@ -3654,6 +3669,23 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 	}
 	case MONO_PATCH_INFO_OBJC_SELECTOR_REF: {
 		target = NULL;
+		break;
+	}
+	case MONO_PATCH_INFO_NURSERY_START_SHIFTED: {
+		size_t nursery_size;
+		int nursery_shift;
+		gpointer nursery_start = mono_gc_get_nursery (&nursery_shift, &nursery_size);
+
+		target = (gpointer)((gsize)nursery_start >> nursery_shift);
+		break;
+	}
+	case MONO_PATCH_INFO_NURSERY_SHIFT: {
+		size_t nursery_size;
+		int nursery_shift;
+
+		mono_gc_get_nursery (&nursery_shift, &nursery_size);
+
+		target = GINT_TO_POINTER (nursery_shift);
 		break;
 	}
 	default:
@@ -7704,6 +7736,8 @@ mini_cleanup (MonoDomain *domain)
 	g_free (emul_opcode_opcodes);
 	g_free (vtable_trampolines);
 
+	mono_tramp_info_cleanup ();
+
 	mono_arch_cleanup ();
 
 	mono_generic_sharing_cleanup ();
@@ -7891,7 +7925,7 @@ mono_arch_get_gsharedvt_trampoline (MonoTrampInfo **info, gboolean aot)
 
 #endif
 
-#if defined(MONO_ARCH_GSHAREDVT_SUPPORTED) && !defined(MONO_GSHARING)
+#if defined(MONO_ARCH_GSHAREDVT_SUPPORTED) && !defined(ENABLE_GSHAREDVT)
 
 gboolean
 mono_arch_gsharedvt_sig_supported (MonoMethodSignature *sig)
