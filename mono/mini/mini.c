@@ -2947,7 +2947,14 @@ mini_get_tls_offset (MonoTlsKey key)
 		offset = mono_thread_get_tls_offset ();
 		break;
 	case TLS_KEY_JIT_TLS:
+#ifdef HOST_WIN32
+		offset = mono_get_jit_tls_key ();
+		/* Only 64 tls entries can be accessed using inline code */
+		if (offset >= 64)
+			offset = -1;
+#else
 		offset = mono_get_jit_tls_offset ();
+#endif
 		break;
 	case TLS_KEY_DOMAIN:
 		offset = mono_domain_get_tls_offset ();
@@ -6958,6 +6965,8 @@ mini_parse_debug_options (void)
 			debug_options.no_gdb_backtrace = TRUE;
 		else if (!strcmp (arg, "suspend-on-sigsegv"))
 			debug_options.suspend_on_sigsegv = TRUE;
+		else if (!strcmp (arg, "suspend-on-exception"))
+			debug_options.suspend_on_exception = TRUE;
 		else if (!strcmp (arg, "suspend-on-unhandled"))
 			debug_options.suspend_on_unhandled = TRUE;
 		else if (!strcmp (arg, "dont-free-domains"))
@@ -6978,7 +6987,7 @@ mini_parse_debug_options (void)
 			debug_options.soft_breakpoints = TRUE;
 		else {
 			fprintf (stderr, "Invalid option for the MONO_DEBUG env variable: %s\n", arg);
-			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'dont-free-domains', 'suspend-on-sigsegv', 'suspend-on-unhandled', 'dyn-runtime-invoke', 'gdb', 'explicit-null-checks', 'init-stacks'\n");
+			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'dont-free-domains', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dyn-runtime-invoke', 'gdb', 'explicit-null-checks', 'init-stacks'\n");
 			exit (1);
 		}
 	}
@@ -7173,6 +7182,9 @@ mini_free_jit_domain_info (MonoDomain *domain)
 		mono_debugger_agent_free_domain_info (domain);
 	if (info->gsharedvt_arg_tramp_hash)
 		g_hash_table_destroy (info->gsharedvt_arg_tramp_hash);
+#ifdef ENABLE_LLVM
+	mono_llvm_free_domain_info (domain);
+#endif
 
 	g_free (domain->runtime_info);
 	domain->runtime_info = NULL;
@@ -7656,10 +7668,6 @@ print_jit_stats (void)
 		g_print ("Shared generic methods: %ld\n", mono_stats.generics_shared_methods);
 		g_print ("Shared vtype generic methods: %ld\n", mono_stats.gsharedvt_methods);
 
-		g_print ("Dynamic code allocs:    %ld\n", mono_stats.dynamic_code_alloc_count);
-		g_print ("Dynamic code bytes:     %ld\n", mono_stats.dynamic_code_bytes_count);
-		g_print ("Dynamic code frees:     %ld\n", mono_stats.dynamic_code_frees_count);
-
 		g_print ("IMT tables size:        %ld\n", mono_stats.imt_tables_size);
 		g_print ("IMT number of tables:   %ld\n", mono_stats.imt_number_of_tables);
 		g_print ("IMT number of methods:  %ld\n", mono_stats.imt_number_of_methods);
@@ -7673,7 +7681,6 @@ print_jit_stats (void)
 		g_print ("JIT info table removes: %ld\n", mono_stats.jit_info_table_remove_count);
 		g_print ("JIT info table lookups: %ld\n", mono_stats.jit_info_table_lookup_count);
 
-		g_print ("Hazardous pointers:     %ld\n", mono_stats.hazardous_pointer_count);
 		if (mono_security_cas_enabled ()) {
 			g_print ("\nDecl security check   : %ld\n", mono_jit_stats.cas_declsec_check);
 			g_print ("LinkDemand (user)     : %ld\n", mono_jit_stats.cas_linkdemand);

@@ -385,10 +385,14 @@ static void thread_cleanup (MonoInternalThread *thread)
 			mono_array_set (thread->cached_culture_info, MonoObject*, i, NULL);
 	}
 
+	/*
+	 * thread->synch_cs can be NULL if this was called after
+	 * ves_icall_System_Threading_InternalThread_Thread_free_internal.
+	 * This can happen only during shutdown.
+	 * The shutting_down flag is not always set, so we can't assert on it.
+	 */
 	if (thread->synch_cs)
 		LOCK_THREAD (thread);
-	else
-		g_assert (shutting_down);
 
 	thread->state |= ThreadState_Stopped;
 	thread->state &= ~ThreadState_Background;
@@ -1031,15 +1035,18 @@ ves_icall_System_Threading_Thread_Thread_internal (MonoThread *this,
 }
 
 /*
- * This is called from the finalizer of the internal thread object. Since threads keep a reference to their
- * thread object while running, by the time this function is called, the thread has already exited/detached,
- * i.e. thread_cleanup () has ran.
+ * This is called from the finalizer of the internal thread object.
  */
 void
 ves_icall_System_Threading_InternalThread_Thread_free_internal (MonoInternalThread *this, HANDLE thread)
 {
 	THREAD_DEBUG (g_message ("%s: Closing thread %p, handle %p", __func__, this, thread));
 
+	/*
+	 * Since threads keep a reference to their thread object while running, by the time this function is called,
+	 * the thread has already exited/detached, i.e. thread_cleanup () has ran. The exception is during shutdown,
+	 * when thread_cleanup () can be called after this.
+	 */
 	if (thread)
 		CloseHandle (thread);
 
@@ -2610,6 +2617,7 @@ static void wait_for_tids (struct wait_data *wait, guint32 timeout)
 		/*
 		 * On !win32, when the thread handle becomes signalled, it just means the thread has exited user code,
 		 * it can still run io-layer etc. code. So wait for it to really exit.
+		 * FIXME: This won't join threads which are not in the joinable_hash yet.
 		 */
 		mono_thread_join ((gpointer)tid);
 
@@ -4773,6 +4781,7 @@ mono_thread_join (gpointer tid)
 {
 #ifndef HOST_WIN32
 	pthread_t thread;
+	gboolean found = FALSE;
 
 	joinable_threads_lock ();
 	if (!joinable_threads)
@@ -4780,8 +4789,11 @@ mono_thread_join (gpointer tid)
 	if (g_hash_table_lookup (joinable_threads, tid)) {
 		g_hash_table_remove (joinable_threads, tid);
 		joinable_thread_count --;
+		found = TRUE;
 	}
 	joinable_threads_unlock ();
+	if (!found)
+		return;
 	thread = (pthread_t)tid;
 	pthread_join (thread, NULL);
 #endif
