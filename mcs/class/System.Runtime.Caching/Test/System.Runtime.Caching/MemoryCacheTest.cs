@@ -1281,5 +1281,84 @@ namespace MonoTests.System.Runtime.Caching
 				Assert.AreEqual (HEAP_RESIZE_LONG_ENTRIES + HEAP_RESIZE_LONG_ENTRIES, mc.GetCount (), "#CS5");	
 			}
 		}
+
+		[Test]
+		public void TestExpiredGetValues ()
+		{
+			var config = new NameValueCollection ();
+			config["cacheMemoryLimitMegabytes"] = 0.ToString ();
+			config["physicalMemoryLimitPercentage"] = 100.ToString ();
+			config["__MonoEmulateOneCPU"] = true.ToString ();
+
+			// it appears that pollingInterval does nothing, so we set the Mono timer as well
+			config["pollingInterval"] = new TimeSpan (0, 0, 10).ToString ();
+			config["__MonoTimerPeriod"] = 10.ToString ();
+			
+			using (var mc = new MemoryCache ("TestExpiredGetValues",  config)) {
+				Assert.AreEqual (0, mc.GetCount (), "#EGV1");
+
+				var keys = new List<string> ();
+
+				// add some short duration entries
+				for (int i = 0; i < 10; i++) {
+					var key = "short-" + i;
+					var expireAt = DateTimeOffset.Now.AddSeconds (1);
+					mc.Add (key, i.ToString (), expireAt);
+
+					keys.Add (key);
+				}
+
+				Assert.AreEqual (10, mc.GetCount (), "#EGV2");
+
+				global::System.Threading.Thread.Sleep (1000);
+
+				// we have waited but the items won't be expired by the timer since it wont have fired yet
+				Assert.AreEqual (10, mc.GetCount (), "#EGV3");
+
+				// calling GetValues() will expire the items since we are now past their expiresAt
+				mc.GetValues (keys);
+
+				Assert.AreEqual (0, mc.GetCount (), "#EGV4");
+			}
+		}
+
+		[Test]
+		public void TestCacheExpiryOrdering ()
+		{
+			var config = new NameValueCollection ();
+			config["cacheMemoryLimitMegabytes"] = 0.ToString ();
+			config["physicalMemoryLimitPercentage"] = 100.ToString ();
+			config["__MonoEmulateOneCPU"] = true.ToString ();
+
+			// it appears that pollingInterval does nothing, so we set the Mono timer as well
+			config["pollingInterval"] = new TimeSpan (0, 0, 1).ToString ();
+			config["__MonoTimerPeriod"] = 1.ToString ();
+
+			using (var mc = new MemoryCache ("TestCacheExpiryOrdering",  config)) {
+				Assert.AreEqual (0, mc.GetCount (), "#CEO1");
+
+				// add long lived items into the cache first
+				for (int i = 0; i < 100; i++) {
+					var cip = new CacheItemPolicy ();
+					cip.SlidingExpiration = new TimeSpan (0, 0, 10);
+					mc.Add ("long-" + i, i, cip);
+				}
+
+				Assert.AreEqual (100, mc.GetCount (), "#CEO2");
+
+				// add shorter lived items into the cache, these should expire first
+				for (int i = 0; i < 100; i++) {
+					var cip = new CacheItemPolicy ();
+					cip.SlidingExpiration = new TimeSpan(0, 0, 1);
+					mc.Add ("short-" + i, i, cip);
+				}
+
+				Assert.AreEqual (200, mc.GetCount (), "#CEO3");
+
+				global::System.Threading.Thread.Sleep (2 * 1000);
+
+				Assert.AreEqual (100, mc.GetCount (), "#CEO4");
+			}
+		}
 	}
 }

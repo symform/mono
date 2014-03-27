@@ -360,8 +360,14 @@ System.Diagnostics.Contracts/ContractShouldAssertException.cs
 System.Diagnostics.Contracts/ContractVerificationAttribute.cs
 System.Diagnostics.Contracts/PureAttribute.cs
 System.Diagnostics.Contracts.Internal/ContractHelper.cs
+System.Diagnostics.Tracing/EventAttribute.cs
+System.Diagnostics.Tracing/EventCommand.cs
+System.Diagnostics.Tracing/EventKeywords.cs
+System.Diagnostics.Tracing/EventLevel.cs
 System.Diagnostics.Tracing/EventSource.cs
+System.Diagnostics.Tracing/EventSourceAttribute.cs
 System.Diagnostics.Tracing/EventCommandEventArgs.cs
+System.Diagnostics.Tracing/NonEventAttribute.cs
 System.Diagnostics.SymbolStore/ISymbolBinder.cs
 System.Diagnostics.SymbolStore/ISymbolBinder1.cs
 System.Diagnostics.SymbolStore/ISymbolDocument.cs
@@ -626,6 +632,7 @@ System.Resources/SatelliteContractVersionAttribute.cs
 System.Resources/UltimateResourceFallbackLocation.cs
 System.Resources/Win32Resources.cs
 System.Runtime/AssemblyTargetedPatchBandAttribute.cs
+System.Runtime/GCLargeObjectHeapCompactionMode.cs
 System.Runtime/GCLatencyMode.cs
 System.Runtime/GCSettings.cs
 System.Runtime/MemoryFailPoint.cs
