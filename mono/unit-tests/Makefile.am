@@ -10,6 +10,7 @@ endif
 
 if !CROSS_COMPILE
 if !HOST_WIN32
+if !DISABLE_LIBRARIES
 if SUPPORT_BOEHM
 
 test_sgen_qsort_SOURCES = test-sgen-qsort.c
@@ -32,6 +33,7 @@ noinst_PROGRAMS = test-sgen-qsort test-gc-memfuncs test-mono-linked-list-set
 TESTS = test-sgen-qsort test-gc-memfuncs test-mono-linked-list-set
 
 endif SUPPORT_BOEHM
+endif !DISABLE_LIBRARIES
 endif !HOST_WIN32
 endif !CROSS_COMPILE
 
