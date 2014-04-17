@@ -1968,6 +1968,7 @@ MonoInst* mono_compile_create_var_load      (MonoCompile *cfg, gssize var_index)
 MonoInst* mono_compile_create_var_store     (MonoCompile *cfg, gssize var_index, MonoInst *value) MONO_INTERNAL;
 MonoType* mono_type_from_stack_type         (MonoInst *ins) MONO_INTERNAL;
 guint32   mono_alloc_ireg                   (MonoCompile *cfg) MONO_LLVM_INTERNAL;
+guint32   mono_alloc_lreg                   (MonoCompile *cfg) MONO_LLVM_INTERNAL;
 guint32   mono_alloc_freg                   (MonoCompile *cfg) MONO_LLVM_INTERNAL;
 guint32   mono_alloc_preg                   (MonoCompile *cfg) MONO_LLVM_INTERNAL;
 guint32   mono_alloc_dreg                   (MonoCompile *cfg, MonoStackType stack_type) MONO_INTERNAL;
@@ -2667,7 +2668,7 @@ MonoMethod* mini_get_shared_method_full (MonoMethod *method, gboolean all_vt, gb
 int mini_type_stack_size (MonoGenericSharingContext *gsctx, MonoType *t, int *align) MONO_INTERNAL;
 int mini_type_stack_size_full (MonoGenericSharingContext *gsctx, MonoType *t, guint32 *align, gboolean pinvoke) MONO_INTERNAL;
 void type_to_eval_stack_type (MonoCompile *cfg, MonoType *type, MonoInst *inst) MONO_INTERNAL;
-guint mono_type_to_regmove (MonoCompile *cfg, MonoType *type) MONO_INTERNAL;
+guint mono_type_to_regmove (MonoCompile *cfg, MonoType *type) MONO_LLVM_INTERNAL;
 
 void mono_cfg_add_try_hole (MonoCompile *cfg, MonoExceptionClause *clause, guint8 *start, MonoBasicBlock *bb) MONO_INTERNAL;
 
@@ -2883,6 +2884,12 @@ gboolean SIG_HANDLER_SIGNATURE (mono_chain_signal) MONO_INTERNAL;
 #define MONO_IS_CROSS_COMPILE 1
 #else
 #define MONO_IS_CROSS_COMPILE 0
+#endif
+
+#if defined(__mono_ilp32__)
+#define MONO_IS_ILP32 1
+#else
+#define MONO_IS_ILP32 0
 #endif
 
 #endif /* __MONO_MINI_H__ */
