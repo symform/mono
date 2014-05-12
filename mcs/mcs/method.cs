@@ -1987,7 +1987,7 @@ namespace Mono.CSharp {
 						return false;
 					}
 				} else {
-					if (implementing != null) {
+					if (implementing != null && !optional) {
 						if (!method.IsAccessor) {
 							if (implementing.IsAccessor) {
 								container.Compiler.Report.SymbolRelatedToPreviousError (implementing);
@@ -2466,6 +2466,11 @@ namespace Mono.CSharp {
 		public override bool IsClsComplianceRequired()
 		{
 			return false;
+		}
+
+		public void PrepareEmit ()
+		{
+			method_data.DefineMethodBuilder (Parent.PartialContainer, ParameterInfo);
 		}
 
 		public override void WriteDebugSymbol (MonoSymbolFile file)

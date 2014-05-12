@@ -56,7 +56,11 @@ namespace Mono.Debugger.Soft
 						throw new NotSupportedException ();
 					var obj = (ObjectMirror)stack [--sp];
 					var field = (FieldInfoMirror)ins.Operand;
-					stack [sp++] = obj.GetValue (field);
+					try {
+						stack [sp++] = obj.GetValue (field);
+					} catch (ArgumentException) {
+						throw new NotSupportedException ();
+					}
 				} else if (op == OpCodes.Stloc_0) {
 					if (sp != 1)
 						throw new NotSupportedException ();
@@ -73,6 +77,8 @@ namespace Mono.Debugger.Soft
 					else
 						res = stack [--sp];
 					break;
+				} else {
+					throw new NotSupportedException ();
 				}
 				ins = next;
 			}

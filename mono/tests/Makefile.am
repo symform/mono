@@ -754,7 +754,8 @@ TestDriver.dll:
 test_cs: $(TEST_PROG) $(TESTSI_CS) libtest.la
 	@failed=0; \
 	passed=0; \
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
 	for i in $(TESTSI_CS); do	\
 		if $(srcdir)/test-driver '$(with_mono_path) $(TEST_PROG_RUN)' $$i "$${disabled_tests}" "$${dump_action}" $(RUNTIME_ARGS); \
 		then \
@@ -769,8 +770,8 @@ test_cs: $(TEST_PROG) $(TESTSI_CS) libtest.la
 test_il: $(TEST_PROG) $(TESTSI_IL) libtest.la
 	@failed=0; \
 	passed=0; \
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
-	if [ "x$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
 	for i in $(TESTSI_IL); do	\
 		if $(srcdir)/test-driver '$(with_mono_path) $(TEST_PROG_RUN)' $$i "$${disabled_tests}" "$${dump_action}" $(RUNTIME_ARGS); \
 		then \
@@ -783,8 +784,8 @@ test_il: $(TEST_PROG) $(TESTSI_IL) libtest.la
 	echo; echo ".il: $${passed} test(s) passed. $${failed} test(s) did not pass."; echo
 
 testb: $(TEST_PROG) $(TESTBS)
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
-	if [ "x$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
 	for i in $(TESTBS); do	\
 		$(srcdir)/test-driver '$(with_mono_path) $(TEST_PROG_RUN)' $$i "$${disabled_tests}" "$${dump_action}" $(RUNTIME_ARGS);	\
 	done
@@ -793,8 +794,8 @@ runtest: $(TESTSI_CS) $(TESTSI_IL) $(TESTBS) libtest.la $(PREREQSI_IL) $(PREREQS
 	@failed=0; \
 	passed=0; \
 	failed_tests="";\
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
-	if [ "x$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
 	rm -f testlist testlist.sorted; \
 	for i in $(TESTSI_CS) $(TESTBS) $(TESTSI_IL); do echo $${i} >> testlist; sort testlist > testlist.sorted; done; \
 	for i in `cat testlist.sorted`; do \
@@ -815,7 +816,7 @@ runtest: $(TESTSI_CS) $(TESTSI_IL) $(TESTBS) libtest.la $(PREREQSI_IL) $(PREREQS
 	  echo -e "\nFailed tests:\n"; \
 	  for i in $${failed_tests}; do \
 	    echo $${i}; \
-	    if [ "x$V" = "x1" ]; then \
+	    if [ "x$$V" = "x1" ]; then \
 	      cat $${i}.stdout; \
 	      cat $${i}.stderr; \
 	    fi; \
@@ -824,8 +825,8 @@ runtest: $(TESTSI_CS) $(TESTSI_IL) $(TESTBS) libtest.la $(PREREQSI_IL) $(PREREQS
 	fi
 
 runtest-managed: test-runner.exe $(TESTSI_CS) $(TESTSI_IL) $(TESTBS) libtest.la $(PREREQSI_IL) $(PREREQSI_CS)
-	if [ "x$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
-	@$(RUNTIME) ./test-runner.exe -j a --disabled '$${disabled_tests}' $(TESTSI_CS) $(TESTBS) $(TESTSI_IL)
+	@if [ "x$$CI" = "x1" ]; then disabled_tests="$(DISABLED_TESTS_WRENCH)"; else disabled_tests="$(DISABLED_TESTS)"; fi; \
+	$(RUNTIME) ./test-runner.exe -j a --disabled "$${disabled_tests}" $(TESTSI_CS) $(TESTBS) $(TESTSI_IL)
 
 testjit:
 	@if test x$(M) != x; then $(MAKE) runtest-managed; else $(MAKE) runtest; fi
@@ -913,26 +914,35 @@ SGEN_CONFIGURATIONS =	\
 	"major=marksweep-conc|ms-conc"	\
 	"major=marksweep-conc,minor=split|ms-conc-split"	\
 	"minor=split|ms-split"	\
-	"minor=split,alloc-ratio=95|ms-split-95"
+	"minor=split,alloc-ratio=95|ms-split-95"	\
+	"|plain-clear-at-gc|clear-at-gc"	\
+	"major=marksweep-par|ms-par-clear-at-gc|clear-at-gc"	\
+	"major=marksweep-conc|ms-conc-clear-at-gc|clear-at-gc"	\
+	"minor=split|ms-split-clear-at-gc|clear-at-gc"
+
 
 #FIXME We should move to use SGEN_CONFIGURATIONS once sgen supports trailling commas or its argument list.
 SGEN_BRIDGE_CONFIGURATIONS =	\
 	"|plain"	\
 	",major=marksweep-conc|ms-conc"	\
-	",minor=split|ms-split"
+	",minor=split|ms-split"	\
+	",bridge-implementation=new|plain-new-bridge"	\
+	",bridge-implementation=new,major=marksweep-conc|ms-conc-new-bridge"	\
+	",bridge-implementation=new,minor=split|ms-split-new-bridge"
 
 sgen-regular-tests: $(SGEN_TESTS)
 	@failed=0; \
 	passed=0; \
 	failed_tests="";\
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
 	for test in $+; do	\
 		echo "...$$test";	\
 		for conf in $(SGEN_CONFIGURATIONS); do 	\
 			name=`echo $$conf | cut -d\| -f 2`;	\
 			params=`echo $$conf | cut -d\| -f 1`;	\
+			debug_opt=`echo $$conf | cut -d\| -f 3`;	\
 			test_name="$${test}|$${name}";	\
-			if MONO_GC_PARAMS="$$params" MONO_ENV_OPTIONS="--gc=sgen" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
+			if MONO_GC_PARAMS="$$params" MONO_ENV_OPTIONS="--gc=sgen" MONO_GC_DEBUG="$$debug_opt" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
 			then \
 				passed=`expr $${passed} + 1`; \
 			else \
@@ -950,14 +960,14 @@ sgen-bridge-tests1: sgen-bridge.exe sgen-bridge-major-fragmentation.exe
 	@failed=0; \
 	passed=0; \
 	failed_tests="";\
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
 	for test in $+; do	\
 		echo "...$$test";	\
 		for conf in $(SGEN_BRIDGE_CONFIGURATIONS); do 	\
 			name=`echo $$conf | cut -d\| -f 2`;	\
 			params=`echo $$conf | cut -d\| -f 1`;	\
 			test_name="$${test}|$${name}";	\
-			if MONO_GC_PARAMS="bridge=Bridge$${params}" MONO_ENV_OPTIONS="--gc=sgen" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
+			if MONO_GC_DEBUG="bridge=Bridge$${params}" MONO_ENV_OPTIONS="--gc=sgen" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
 			then \
 				passed=`expr $${passed} + 1`; \
 			else \
@@ -975,14 +985,14 @@ sgen-bridge-tests2: sgen-bridge-xref.exe
 	@failed=0; \
 	passed=0; \
 	failed_tests="";\
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
 	for test in $+; do	\
 		echo "...$$test";	\
 		for conf in $(SGEN_BRIDGE_CONFIGURATIONS); do 	\
 			name=`echo $$conf | cut -d\| -f 2`;	\
 			params=`echo $$conf | cut -d\| -f 1`;	\
 			test_name="$${test}|$${name}";	\
-			if MONO_GC_PARAMS="bridge=2Bridge$${params}" MONO_ENV_OPTIONS="--gc=sgen" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
+			if MONO_GC_DEBUG="bridge=2Bridge$${params}" MONO_ENV_OPTIONS="--gc=sgen" $(srcdir)/test-driver '$(with_mono_path) $(JITTEST_PROG_RUN)' $$test_name "$(DISABLED_TESTS_SGEN)" "$${dump_action}" $(RUNTIME_ARGS);	\
 			then \
 				passed=`expr $${passed} + 1`; \
 			else \
@@ -1000,7 +1010,7 @@ sgen-toggleref-tests: sgen-toggleref.exe
 	@failed=0; \
 	passed=0; \
 	failed_tests="";\
-	if [ "x$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
+	if [ "x$$V" = "x1" ]; then dump_action="dump-output"; else dump_action="no-dump"; fi; \
 	for test in $+; do	\
 		echo "...$$test";	\
 		for conf in $(SGEN_CONFIGURATIONS); do 	\

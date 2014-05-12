@@ -50,7 +50,7 @@ align_pointer (void *ptr)
 }
 
 #ifdef USE_MONO_CTX
-static MonoContext cur_thread_ctx = {0};
+static MonoContext cur_thread_ctx;
 #else
 static mword cur_thread_regs [ARCH_NUM_REGS] = {0};
 #endif
@@ -244,7 +244,8 @@ sgen_stop_world (int generation)
 	time_stop_world += TV_ELAPSED (stop_world_time, end_handshake);
 
 	sgen_memgov_collection_start (generation);
-	sgen_bridge_reset_data ();
+	if (sgen_need_bridge_processing ())
+		sgen_bridge_reset_data ();
 
 	return count;
 }
@@ -306,7 +307,8 @@ sgen_restart_world (int generation, GGTimingInfo *timing)
 
 	sgen_try_free_some_memory = TRUE;
 
-	sgen_bridge_processing_finish (generation);
+	if (sgen_need_bridge_processing ())
+		sgen_bridge_processing_finish (generation);
 
 	TV_GETTIME (end_bridge);
 	bridge_usec = TV_ELAPSED (end_sw, end_bridge);
@@ -324,8 +326,8 @@ sgen_restart_world (int generation, GGTimingInfo *timing)
 void
 sgen_init_stw (void)
 {
-	mono_counters_register ("World stop", MONO_COUNTER_GC | MONO_COUNTER_TIME_INTERVAL, &time_stop_world);
-	mono_counters_register ("World restart", MONO_COUNTER_GC | MONO_COUNTER_TIME_INTERVAL, &time_restart_world);
+	mono_counters_register ("World stop", MONO_COUNTER_GC | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &time_stop_world);
+	mono_counters_register ("World restart", MONO_COUNTER_GC | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &time_restart_world);
 }
 
 #endif

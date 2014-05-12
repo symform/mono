@@ -139,8 +139,6 @@ gboolean check_for_pending_exc = TRUE;
 /* Whenever to disable passing/returning small valuetypes in registers for managed methods */
 gboolean disable_vtypes_in_regs = FALSE;
 
-gboolean mono_dont_free_global_codeman;
-
 static GSList *tramp_infos;
 
 gpointer
@@ -2405,6 +2403,8 @@ register_opcode_emulation (int opcode, const char *name, const char *sigstr, gpo
 /*
  * For JIT icalls implemented in C.
  * NAME should be the same as the name of the C function whose address is FUNC.
+ * If SAVE is TRUE, no wrapper is generated. This is for perf critical icalls which
+ * can't throw exceptions.
  */
 static void
 register_icall (gpointer func, const char *name, const char *sigstr, gboolean save)
@@ -4100,9 +4100,6 @@ mono_codegen (MonoCompile *cfg)
 
 	code = mono_arch_emit_prolog (cfg);
 
-	if (cfg->prof_options & MONO_PROFILE_ENTER_LEAVE)
-		code = mono_arch_instrument_prolog (cfg, mono_profiler_method_enter, code, FALSE);
-
 	cfg->code_len = code - cfg->native_code;
 	cfg->prolog_end = cfg->code_len;
 
@@ -4118,14 +4115,6 @@ mono_codegen (MonoCompile *cfg)
 
 		if (bb == cfg->bb_exit) {
 			cfg->epilog_begin = cfg->code_len;
-
-			if (cfg->prof_options & MONO_PROFILE_ENTER_LEAVE) {
-				code = cfg->native_code + cfg->code_len;
-				code = mono_arch_instrument_epilog (cfg, mono_profiler_method_leave, code, FALSE);
-				cfg->code_len = code - cfg->native_code;
-				g_assert (cfg->code_len < cfg->code_size);
-			}
-
 			mono_arch_emit_epilog (cfg);
 		}
 	}
@@ -7061,8 +7050,8 @@ mini_get_addr_from_ftnptr (gpointer descr)
 static void
 register_jit_stats (void)
 {
-	mono_counters_register ("Compiled methods", MONO_COUNTER_JIT | MONO_COUNTER_WORD, &mono_jit_stats.methods_compiled);
-	mono_counters_register ("Methods from AOT", MONO_COUNTER_JIT | MONO_COUNTER_WORD, &mono_jit_stats.methods_aot);
+	mono_counters_register ("Compiled methods", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_compiled);
+	mono_counters_register ("Methods from AOT", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_aot);
 	mono_counters_register ("Methods JITted using mono JIT", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_without_llvm);
 	mono_counters_register ("Methods JITted using LLVM", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_with_llvm);	
 	mono_counters_register ("Total time spent JITting (sec)", MONO_COUNTER_JIT | MONO_COUNTER_DOUBLE, &mono_jit_stats.jit_time);
@@ -7410,7 +7399,7 @@ mini_init (const char *filename, const char *runtime_version)
 	mono_add_internal_call ("Mono.Runtime::mono_runtime_install_handlers", 
 				mono_runtime_install_handlers);
 
-#ifdef PLATFORM_ANDROID
+#if defined(PLATFORM_ANDROID) || defined(TARGET_ANDROID)
 	mono_add_internal_call ("System.Diagnostics.Debugger::Mono_UnhandledException_internal",
 				mono_debugger_agent_unhandled_exception);
 #endif
@@ -7427,8 +7416,17 @@ mini_init (const char *filename, const char *runtime_version)
 	mono_marshal_init ();
 
 	mono_arch_register_lowlevel_calls ();
-	register_icall (mono_profiler_method_enter, "mono_profiler_method_enter", NULL, TRUE);
-	register_icall (mono_profiler_method_leave, "mono_profiler_method_leave", NULL, TRUE);
+
+	/*
+	 * It's important that we pass `TRUE` as the last argument here, as
+	 * it causes the JIT to omit a wrapper for these icalls. If the JIT
+	 * *did* emit a wrapper, we'd be looking at infinite recursion since
+	 * the wrapper would call the icall which would call the wrapper and
+	 * so on.
+	 */
+	register_icall (mono_profiler_method_enter, "mono_profiler_method_enter", "void ptr", TRUE);
+	register_icall (mono_profiler_method_leave, "mono_profiler_method_leave", "void ptr", TRUE);
+
 	register_icall (mono_trace_enter_method, "mono_trace_enter_method", NULL, TRUE);
 	register_icall (mono_trace_leave_method, "mono_trace_leave_method", NULL, TRUE);
 	register_icall (mono_get_lmf_addr, "mono_get_lmf_addr", "ptr", TRUE);
@@ -7622,7 +7620,7 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 #ifdef TARGET_IOS
-	register_icall (pthread_getspecific, "pthread_getspecific", NULL, TRUE);
+	register_icall (pthread_getspecific, "pthread_getspecific", "ptr ptr", TRUE);
 #endif
 
 	mono_generic_sharing_init ();
@@ -7762,8 +7760,7 @@ mini_cleanup (MonoDomain *domain)
 
 	mono_unwind_cleanup ();
 
-	if (!mono_dont_free_global_codeman)
-		mono_code_manager_destroy (global_codeman);
+	mono_code_manager_destroy (global_codeman);
 	g_hash_table_destroy (jit_icall_name_hash);
 	g_free (emul_opcode_map);
 	g_free (emul_opcode_opcodes);
@@ -7779,7 +7776,7 @@ mini_cleanup (MonoDomain *domain)
 
 	mono_trace_cleanup ();
 
-	mono_counters_dump (-1, stdout);
+	mono_counters_dump (MONO_COUNTER_SECTION_MASK | MONO_COUNTER_MONOTONIC, stdout);
 
 	if (mono_inject_async_exc_method)
 		mono_method_desc_free (mono_inject_async_exc_method);

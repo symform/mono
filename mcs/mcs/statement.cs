@@ -3209,8 +3209,9 @@ namespace Mono.CSharp {
 
 						for (ExplicitBlock b = ref_block; b.AnonymousMethodStorey != storey; b = b.Parent.Explicit) {
 							ParametersBlock pb;
+							AnonymousMethodStorey b_storey = b.AnonymousMethodStorey;
 
-							if (b.AnonymousMethodStorey != null) {
+							if (b_storey != null) {
 								//
 								// Don't add storey cross reference for `this' when the storey ends up not
 								// beeing attached to any parent
@@ -3229,21 +3230,23 @@ namespace Mono.CSharp {
 										b.AnonymousMethodStorey.AddCapturedThisField (ec, parent);
 										break;
 									}
-								}
 
-								b.AnonymousMethodStorey.AddParentStoreyReference (ec, storey);
-								b.AnonymousMethodStorey.HoistedThis = storey.HoistedThis;
+								}
 
 								//
 								// Stop propagation inside same top block
 								//
-								if (b.ParametersBlock == ParametersBlock.Original)
+								if (b.ParametersBlock == ParametersBlock.Original) {
+									b_storey.AddParentStoreyReference (ec, storey);
+//									b_storey.HoistedThis = storey.HoistedThis;
 									break;
+								}
 
-								b = b.ParametersBlock;
+								b = pb = b.ParametersBlock;
+							} else {
+								pb = b as ParametersBlock;
 							}
 
-							pb = b as ParametersBlock;
 							if (pb != null && pb.StateMachine != null) {
 								if (pb.StateMachine == storey)
 									break;
@@ -3268,8 +3271,14 @@ namespace Mono.CSharp {
 
 								pb.StateMachine.AddParentStoreyReference (ec, storey);
 							}
-							
-							b.HasCapturedVariable = true;
+
+							//
+							// Add parent storey reference only when this is not captured directly
+							//
+							if (b_storey != null) {
+								b_storey.AddParentStoreyReference (ec, storey);
+								b_storey.HoistedThis = storey.HoistedThis;
+							}
 						}
 					}
 				}
@@ -6840,7 +6849,7 @@ namespace Mono.CSharp {
 			{
 				var type = li.Type;
 
-				if (type.BuiltinType != BuiltinTypeSpec.Type.IDisposable && !type.ImplementsInterface (bc.BuiltinTypes.IDisposable, false)) {
+				if (type.BuiltinType != BuiltinTypeSpec.Type.IDisposable && !CanConvertToIDisposable (bc, type)) {
 					if (type.IsNullableType) {
 						// it's handled in CreateDisposeCall
 						return;
@@ -6855,6 +6864,16 @@ namespace Mono.CSharp {
 
 					return;
 				}
+			}
+
+			static bool CanConvertToIDisposable (BlockContext bc, TypeSpec type)
+			{
+				var target = bc.BuiltinTypes.IDisposable;
+				var tp = type as TypeParameterSpec;
+				if (tp != null)
+					return Convert.ImplicitTypeParameterConversion (null, tp, target) != null;
+
+				return type.ImplementsInterface (target, false);
 			}
 
 			protected virtual Statement CreateDisposeCall (BlockContext bc, LocalVariable lv)
@@ -6877,7 +6896,7 @@ namespace Mono.CSharp {
 				Statement dispose = new StatementExpression (new Invocation (dispose_mg, null), Location.Null);
 
 				// Add conditional call when disposing possible null variable
-				if (!type.IsStruct || type.IsNullableType)
+				if (!TypeSpec.IsValueType (type) || type.IsNullableType)
 					dispose = new If (new Binary (Binary.Operator.Inequality, lvr, new NullLiteral (loc)), dispose, dispose.loc);
 
 				return dispose;

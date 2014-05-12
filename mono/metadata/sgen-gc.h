@@ -64,8 +64,8 @@ NurseryClearPolicy sgen_get_nursery_clear_policy (void) MONO_INTERNAL;
 
 #define SGEN_TV_DECLARE(name) gint64 name
 #define SGEN_TV_GETTIME(tv) tv = mono_100ns_ticks ()
-#define SGEN_TV_ELAPSED(start,end) (int)((end-start) / 10)
-#define SGEN_TV_ELAPSED_MS(start,end) ((SGEN_TV_ELAPSED((start),(end)) + 500) / 1000)
+#define SGEN_TV_ELAPSED(start,end) (int)((end-start))
+#define SGEN_TV_ELAPSED_MS(start,end) ((SGEN_TV_ELAPSED((start),(end)) + 5000) / 10000)
 
 #if !defined(__MACH__) && !MONO_MACH_ARCH_SUPPORTED && defined(HAVE_PTHREAD_KILL)
 #define SGEN_POSIX_STW 1
@@ -228,6 +228,7 @@ extern int current_collection_generation;
 extern unsigned int sgen_global_stop_count;
 
 extern gboolean bridge_processing_in_progress;
+extern MonoGCBridgeCallbacks bridge_callbacks;
 
 extern int num_ready_finalizers;
 
@@ -365,6 +366,7 @@ List of what each bit on of the vtable gc bits means.
 */
 enum {
 	SGEN_GC_BIT_BRIDGE_OBJECT = 1,
+	SGEN_GC_BIT_BRIDGE_OPAQUE_OBJECT = 2,
 };
 
 /* the runtime can register areas of memory as roots: we keep two lists of roots,
@@ -425,10 +427,16 @@ enum {
 	INTERNAL_MEM_WORKER_DATA,
 	INTERNAL_MEM_WORKER_JOB_DATA,
 	INTERNAL_MEM_BRIDGE_DATA,
+	INTERNAL_MEM_OLD_BRIDGE_HASH_TABLE,
+	INTERNAL_MEM_OLD_BRIDGE_HASH_TABLE_ENTRY,
 	INTERNAL_MEM_BRIDGE_HASH_TABLE,
 	INTERNAL_MEM_BRIDGE_HASH_TABLE_ENTRY,
 	INTERNAL_MEM_BRIDGE_ALIVE_HASH_TABLE,
 	INTERNAL_MEM_BRIDGE_ALIVE_HASH_TABLE_ENTRY,
+	INTERNAL_MEM_TARJAN_BRIDGE_HASH_TABLE,
+	INTERNAL_MEM_TARJAN_BRIDGE_HASH_TABLE_ENTRY,
+	INTERNAL_MEM_TARJAN_OBJ_BUCKET,
+	INTERNAL_MEM_BRIDGE_DEBUG,
 	INTERNAL_MEM_JOB_QUEUE_ENTRY,
 	INTERNAL_MEM_TOGGLEREF_DATA,
 	INTERNAL_MEM_CARDTABLE_MOD_UNION,
@@ -813,6 +821,41 @@ void sgen_clear_togglerefs (char *start, char *end, ScanCopyContext ctx) MONO_IN
 
 void sgen_process_togglerefs (void) MONO_INTERNAL;
 void sgen_register_test_toggleref_callback (void) MONO_INTERNAL;
+
+gboolean sgen_is_bridge_object (MonoObject *obj) MONO_INTERNAL;
+void sgen_mark_bridge_object (MonoObject *obj) MONO_INTERNAL;
+
+gboolean sgen_bridge_handle_gc_debug (const char *opt) MONO_INTERNAL;
+void sgen_bridge_print_gc_debug_usage (void) MONO_INTERNAL;
+
+typedef struct {
+	void (*reset_data) (void);
+	void (*processing_stw_step) (void);
+	void (*processing_build_callback_data) (int generation);
+	void (*processing_after_callback) (int generation);
+	MonoGCBridgeObjectKind (*class_kind) (MonoClass *class);
+	void (*register_finalized_object) (MonoObject *object);
+	void (*describe_pointer) (MonoObject *object);
+	void (*enable_accounting) (void);
+	void (*set_dump_prefix) (const char *prefix);
+
+	/*
+	 * These are set by processing_build_callback_data().
+	 */
+	int num_sccs;
+	MonoGCBridgeSCC **api_sccs;
+
+	int num_xrefs;
+	MonoGCBridgeXRef *api_xrefs;
+} SgenBridgeProcessor;
+
+void sgen_old_bridge_init (SgenBridgeProcessor *collector) MONO_INTERNAL;
+void sgen_new_bridge_init (SgenBridgeProcessor *collector) MONO_INTERNAL;
+void sgen_tarjan_bridge_init (SgenBridgeProcessor *collector) MONO_INTERNAL;
+void sgen_set_bridge_implementation (const char *name) MONO_INTERNAL;
+void sgen_bridge_set_dump_prefix (const char *prefix) MONO_INTERNAL;
+
+gboolean sgen_compare_bridge_processor_results (SgenBridgeProcessor *a, SgenBridgeProcessor *b) MONO_INTERNAL;
 
 typedef mono_bool (*WeakLinkAlivePredicateFunc) (MonoObject*, void*);
 

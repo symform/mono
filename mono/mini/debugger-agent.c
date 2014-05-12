@@ -285,7 +285,7 @@ typedef struct {
 #define HEADER_LENGTH 11
 
 #define MAJOR_VERSION 2
-#define MINOR_VERSION 29
+#define MINOR_VERSION 32
 
 typedef enum {
 	CMD_SET_VM = 1,
@@ -371,7 +371,8 @@ typedef enum {
 	STEP_FILTER_NONE = 0,
 	STEP_FILTER_STATIC_CTOR = 1,
 	STEP_FILTER_DEBUGGER_HIDDEN = 2,
-	STEP_FILTER_DEBUGGER_STEP_THROUGH = 4
+	STEP_FILTER_DEBUGGER_STEP_THROUGH = 4,
+	STEP_FILTER_DEBUGGER_NON_USER_CODE = 8
 } StepFilter;
 
 typedef enum {
@@ -495,7 +496,8 @@ typedef enum {
 	CMD_TYPE_GET_METHODS_BY_NAME_FLAGS = 15,
 	CMD_TYPE_GET_INTERFACES = 16,
 	CMD_TYPE_GET_INTERFACE_MAP = 17,
-	CMD_TYPE_IS_INITIALIZED = 18
+	CMD_TYPE_IS_INITIALIZED = 18,
+	CMD_TYPE_CREATE_INSTANCE = 19
 } CmdType;
 
 typedef enum {
@@ -3414,7 +3416,7 @@ create_event_list (EventKind event, GPtrArray *reqs, MonoJitInfo *ji, EventInfo 
 						MonoDebugMethodInfo *minfo = mono_debug_lookup_method (method);
 
 						if (minfo) {
-							mono_debug_symfile_get_line_numbers_full (minfo, &source_file, &source_file_list, NULL, NULL, NULL, NULL, NULL);
+							mono_debug_symfile_get_line_numbers_full (minfo, &source_file, &source_file_list, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 							for (i = 0; i < source_file_list->len; ++i) {
 								sinfo = g_ptr_array_index (source_file_list, i);
 								/*
@@ -3496,6 +3498,32 @@ create_event_list (EventKind event, GPtrArray *reqs, MonoJitInfo *ji, EventInfo 
 							ji->dbg_step_through_inited = TRUE;
 						}
 						if (ji->dbg_step_through)
+							filtered = TRUE;
+					}
+					if ((mod->data.filter & STEP_FILTER_DEBUGGER_NON_USER_CODE) && ji) {
+						MonoCustomAttrInfo *ainfo;
+						static MonoClass *klass;
+
+						if (!klass) {
+							klass = mono_class_from_name (mono_defaults.corlib, "System.Diagnostics", "DebuggerNonUserCodeAttribute");
+							g_assert (klass);
+						}
+						if (!ji->dbg_non_user_code_inited) {
+							ainfo = mono_custom_attrs_from_method (jinfo_get_method (ji));
+							if (ainfo) {
+								if (mono_custom_attrs_has_attr (ainfo, klass))
+									ji->dbg_non_user_code = TRUE;
+								mono_custom_attrs_free (ainfo);
+							}
+							ainfo = mono_custom_attrs_from_class (jinfo_get_method (ji)->klass);
+							if (ainfo) {
+								if (mono_custom_attrs_has_attr (ainfo, klass))
+									ji->dbg_non_user_code = TRUE;
+								mono_custom_attrs_free (ainfo);
+							}
+							ji->dbg_non_user_code_inited = TRUE;
+						}
+						if (ji->dbg_non_user_code)
 							filtered = TRUE;
 					}
 				}
@@ -5301,7 +5329,7 @@ mono_debugger_agent_debug_log_is_enabled (void)
 	return agent_config.enabled;
 }
 
-#ifdef PLATFORM_ANDROID
+#if defined(PLATFORM_ANDROID) || defined(TARGET_ANDROID)
 void
 mono_debugger_agent_unhandled_exception (MonoException *exc)
 {
@@ -6539,7 +6567,7 @@ get_source_files_for_type (MonoClass *klass)
 		GPtrArray *source_file_list;
 
 		if (minfo) {
-			mono_debug_symfile_get_line_numbers_full (minfo, NULL, &source_file_list, NULL, NULL, NULL, NULL, NULL);
+			mono_debug_symfile_get_line_numbers_full (minfo, NULL, &source_file_list, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 			for (j = 0; j < source_file_list->len; ++j) {
 				sinfo = g_ptr_array_index (source_file_list, j);
 				for (i = 0; i < files->len; ++i)
@@ -7964,6 +7992,13 @@ type_commands_internal (int command, MonoClass *klass, MonoDomain *domain, guint
 			buffer_add_int (buf, 0);
 		break;
 	}
+	case CMD_TYPE_CREATE_INSTANCE: {
+		MonoObject *obj;
+
+		obj = mono_object_new (domain, klass);
+		buffer_add_objid (buf, obj);
+		break;
+	}
 	default:
 		return ERR_NOT_IMPLEMENTED;
 	}
@@ -8016,6 +8051,8 @@ method_commands_internal (int command, MonoMethod *method, MonoDomain *domain, g
 		int *il_offsets;
 		int *line_numbers;
 		int *column_numbers;
+		int *end_line_numbers;
+		int *end_column_numbers;
 		int *source_files;
 		GPtrArray *source_file_list;
 
@@ -8036,7 +8073,7 @@ method_commands_internal (int command, MonoMethod *method, MonoDomain *domain, g
 			break;
 		}
 
-		mono_debug_symfile_get_line_numbers_full (minfo, &source_file, &source_file_list, &n_il_offsets, &il_offsets, &line_numbers, &column_numbers, &source_files);
+		mono_debug_symfile_get_line_numbers_full (minfo, &source_file, &source_file_list, &n_il_offsets, &il_offsets, &line_numbers, &column_numbers, &source_files, &end_line_numbers, &end_column_numbers);
 		buffer_add_int (buf, header->code_size);
 		if (CHECK_PROTOCOL_VERSION (2, 13)) {
 			buffer_add_int (buf, source_file_list->len);
@@ -8067,10 +8104,17 @@ method_commands_internal (int command, MonoMethod *method, MonoDomain *domain, g
 				buffer_add_int (buf, source_files [i]);
 			if (CHECK_PROTOCOL_VERSION (2, 19))
 				buffer_add_int (buf, column_numbers ? column_numbers [i] : -1);
+			if (CHECK_PROTOCOL_VERSION (2, 32)) {
+				buffer_add_int (buf, end_line_numbers ? end_line_numbers [i] : -1);
+				buffer_add_int (buf, end_column_numbers ? end_column_numbers [i] : -1);
+			}
 		}
 		g_free (source_file);
 		g_free (il_offsets);
 		g_free (line_numbers);
+		g_free (column_numbers);
+		g_free (end_line_numbers);
+		g_free (end_column_numbers);
 		g_free (source_files);
 		g_ptr_array_free (source_file_list, TRUE);
 		mono_metadata_free_mh (header);

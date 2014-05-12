@@ -1953,10 +1953,26 @@ emit_push_lmf (MonoCompile *cfg)
 		}
 #else
 		lmf_ins = mono_get_lmf_addr_intrinsic (cfg);
-		if (lmf_ins) 
+		if (lmf_ins) {
 			MONO_ADD_INS (cfg->cbb, lmf_ins);
-		else
+		} else {
+#ifdef TARGET_IOS
+			MonoInst *args [16], *jit_tls_ins, *ins;
+
+			/* Inline mono_get_lmf_addr () */
+			/* jit_tls = pthread_getspecific (mono_jit_tls_id); lmf_addr = &jit_tls->lmf; */
+
+			/* Load mono_jit_tls_id */
+			EMIT_NEW_AOTCONST (cfg, args [0], MONO_PATCH_INFO_JIT_TLS_ID, NULL);
+			/* call pthread_getspecific () */
+			jit_tls_ins = mono_emit_jit_icall (cfg, pthread_getspecific, args);
+			/* lmf_addr = &jit_tls->lmf */
+			EMIT_NEW_BIALU_IMM (cfg, ins, OP_PADD_IMM, cfg->lmf_addr_var->dreg, jit_tls_ins->dreg, G_STRUCT_OFFSET (MonoJitTlsData, lmf));
+			lmf_ins = ins;
+#else
 			lmf_ins = mono_emit_jit_icall (cfg, mono_get_lmf_addr, NULL);
+#endif
+		}
 #endif
 		lmf_ins->dreg = cfg->lmf_addr_var->dreg;
 
@@ -2008,6 +2024,24 @@ emit_pop_lmf (MonoCompile *cfg)
 		prev_lmf_reg = alloc_preg (cfg);
 		EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOAD_MEMBASE, prev_lmf_reg, lmf_reg, G_STRUCT_OFFSET (MonoLMF, previous_lmf));
 		EMIT_NEW_STORE_MEMBASE (cfg, ins, OP_STORE_MEMBASE_REG, lmf_addr_reg, 0, prev_lmf_reg);
+	}
+}
+
+static void
+emit_instrumentation_call (MonoCompile *cfg, void *func)
+{
+	MonoInst *iargs [1];
+
+	/*
+	 * Avoid instrumenting inlined methods since it can
+	 * distort profiling results.
+	 */
+	if (cfg->method != cfg->current_method)
+		return;
+
+	if (cfg->prof_options & MONO_PROFILE_ENTER_LEAVE) {
+		EMIT_NEW_METHODCONST (cfg, iargs [0], cfg->method);
+		mono_emit_jit_icall (cfg, func, iargs);
 	}
 }
 
@@ -2466,9 +2500,11 @@ mono_emit_call_args (MonoCompile *cfg, MonoMethodSignature *sig,
 	int i;
 #endif
 
-	if (tail)
+	if (tail) {
+		emit_instrumentation_call (cfg, mono_profiler_method_leave);
+
 		MONO_INST_NEW_CALL (cfg, call, OP_TAILCALL);
-	else
+	} else
 		MONO_INST_NEW_CALL (cfg, call, ret_type_to_call_opcode (sig->ret, calli, virtual, cfg->generic_sharing_context));
 
 	call->args = args;
@@ -5686,10 +5722,10 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 		if (args [0]->opcode == OP_GOT_ENTRY) {
 			pi = args [0]->inst_p1;
 			g_assert (pi->opcode == OP_PATCH_INFO);
-			g_assert ((int)pi->inst_p1 == MONO_PATCH_INFO_LDSTR);
+			g_assert (GPOINTER_TO_INT (pi->inst_p1) == MONO_PATCH_INFO_LDSTR);
 			ji = pi->inst_p0;
 		} else {
-			g_assert ((int)args [0]->inst_p1 == MONO_PATCH_INFO_LDSTR);
+			g_assert (GPOINTER_TO_INT (args [0]->inst_p1) == MONO_PATCH_INFO_LDSTR);
 			ji = args [0]->inst_p0;
 		}
 
@@ -6862,7 +6898,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			int *il_offsets;
 			int *line_numbers;
 
-			mono_debug_symfile_get_line_numbers_full (minfo, NULL, NULL, &n_il_offsets, &il_offsets, &line_numbers, NULL, NULL);
+			mono_debug_symfile_get_line_numbers_full (minfo, NULL, NULL, &n_il_offsets, &il_offsets, &line_numbers, NULL, NULL, NULL, NULL);
 			seq_point_locs = mono_bitset_mem_new (mono_mempool_alloc0 (cfg->mempool, mono_bitset_alloc_size (header->code_size, 0)), header->code_size, 0);
 			seq_point_set_locs = mono_bitset_mem_new (mono_mempool_alloc0 (cfg->mempool, mono_bitset_alloc_size (header->code_size, 0)), header->code_size, 0);
 			sym_seq_points = TRUE;
@@ -7375,7 +7411,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 		 * Currently, we generate these automatically at points where the IL
 		 * stack is empty.
 		 */
-		if (seq_points && ((sp == stack_start) || (sym_seq_points && mono_bitset_test_fast (seq_point_locs, ip - header->code)))) {
+		if (seq_points && ((!sym_seq_points && (sp == stack_start)) || (sym_seq_points && mono_bitset_test_fast (seq_point_locs, ip - header->code)))) {
 			/*
 			 * Make methods interruptable at the beginning, and at the targets of
 			 * backward branches.
@@ -7729,6 +7765,8 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 
 			if (mono_security_cas_enabled ())
 				CHECK_CFG_EXCEPTION;
+
+			emit_instrumentation_call (cfg, mono_profiler_method_leave);
 
 			if (ARCH_HAVE_OP_TAIL_CALL) {
 				MonoMethodSignature *fsig = mono_method_signature (cmethod);
@@ -8539,6 +8577,8 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 					/* Handle tail calls similarly to normal calls */
 					tail_call = TRUE;
 				} else {
+					emit_instrumentation_call (cfg, mono_profiler_method_leave);
+
 					MONO_INST_NEW_CALL (cfg, call, OP_JMP);
 					call->tail_call = TRUE;
 					call->method = cmethod;
@@ -8666,6 +8706,8 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 					cfg->ret_var_set = TRUE;
 				} 
 			} else {
+				emit_instrumentation_call (cfg, mono_profiler_method_leave);
+
 				if (cfg->lmf_var && cfg->cbb->in_count)
 					emit_pop_lmf (cfg);
 
@@ -12162,6 +12204,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 		cfg->cbb = init_localsbb;
 		emit_push_lmf (cfg);
 	}
+
+	cfg->cbb = init_localsbb;
+	emit_instrumentation_call (cfg, mono_profiler_method_enter);
 
 	if (seq_points) {
 		MonoBasicBlock *bb;
