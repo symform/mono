@@ -688,11 +688,7 @@ namespace Mono.CSharp {
 				infinite = true;
 			}
 
-			base.Resolve (bc);
-
-			Iterator.Resolve (bc);
-
-			return true;
+			return base.Resolve (bc) && Iterator.Resolve (bc);
 		}
 
 		protected override bool DoFlowAnalysis (FlowAnalysisContext fc)
@@ -859,11 +855,11 @@ namespace Mono.CSharp {
 			var prev_loop = bc.EnclosingLoop;
 			var prev_los = bc.EnclosingLoopOrSwitch;
 			bc.EnclosingLoopOrSwitch = bc.EnclosingLoop = this;
-			Statement.Resolve (bc);
+			var ok = Statement.Resolve (bc);
 			bc.EnclosingLoopOrSwitch = prev_los;
 			bc.EnclosingLoop = prev_loop;
 
-			return true;
+			return ok;
 		}
 
 		//
@@ -1202,15 +1198,16 @@ namespace Mono.CSharp {
 						var async_type = storey.ReturnType;
 
 						if (async_type == null && async_block.ReturnTypeInference != null) {
-							async_block.ReturnTypeInference.AddCommonTypeBoundAsync (expr.Type);
+							if (expr.Type.Kind == MemberKind.Void && !(this is ContextualReturn))
+								ec.Report.Error (4029, loc, "Cannot return an expression of type `void'");
+							else
+								async_block.ReturnTypeInference.AddCommonTypeBoundAsync (expr.Type);
 							return true;
 						}
 
 						if (async_type.Kind == MemberKind.Void) {
-							ec.Report.Error (127, loc,
-								"`{0}': A return keyword must not be followed by any expression when method returns void",
-								ec.GetSignatureForError ());
-
+							ec.Report.Error (8030, loc,
+								"Anonymous function or lambda expression converted to a void returning delegate cannot return a value");
 							return false;
 						}
 
@@ -1218,18 +1215,14 @@ namespace Mono.CSharp {
 							if (this is ContextualReturn)
 								return true;
 
-							// Same error code as .NET but better error message
 							if (async_block.DelegateType != null) {
-								ec.Report.Error (1997, loc,
-									"`{0}': A return keyword must not be followed by an expression when async delegate returns `Task'. Consider using `Task<T>' return type",
-									async_block.DelegateType.GetSignatureForError ());
+								ec.Report.Error (8031, loc,
+									"Async lambda expression or anonymous method converted to a `Task' cannot return a value. Consider returning `Task<T>'");
 							} else {
 								ec.Report.Error (1997, loc,
 									"`{0}': A return keyword must not be followed by an expression when async method returns `Task'. Consider using `Task<T>' return type",
 									ec.GetSignatureForError ());
-
 							}
-
 							return false;
 						}
 
@@ -1245,12 +1238,9 @@ namespace Mono.CSharp {
 						}
 					}
 				} else {
-					// Same error code as .NET but better error message
 					if (block_return_type.Kind == MemberKind.Void) {
-						ec.Report.Error (127, loc,
-							"`{0}': A return keyword must not be followed by any expression when delegate returns void",
-							am.GetSignatureForError ());
-
+						ec.Report.Error (8030, loc,
+							"Anonymous function or lambda expression converted to a void returning delegate cannot return a value");
 						return false;
 					}
 
@@ -1791,9 +1781,20 @@ namespace Mono.CSharp {
 			
 		protected override void DoEmit (EmitContext ec)
 		{
-			if (expr == null)
-				ec.Emit (OpCodes.Rethrow);
-			else {
+			if (expr == null) {
+				var atv = ec.AsyncThrowVariable;
+				if (atv != null) {
+					if (atv.HoistedVariant != null) {
+						atv.HoistedVariant.Emit (ec);
+					} else {
+						atv.Emit (ec);
+					}
+
+					ec.Emit (OpCodes.Throw);
+				} else {
+					ec.Emit (OpCodes.Rethrow);
+				}
+			} else {
 				expr.Emit (ec);
 
 				ec.Emit (OpCodes.Throw);
@@ -2898,10 +2899,12 @@ namespace Mono.CSharp {
 			DoEmit (ec);
 		}
 
-		protected void EmitScopeInitializers (EmitContext ec)
+		public void EmitScopeInitializers (EmitContext ec)
 		{
 			foreach (Statement s in scope_initializers)
 				s.Emit (ec);
+
+			scope_initializers = null;
 		}
 
 		protected override bool DoFlowAnalysis (FlowAnalysisContext fc)
@@ -3726,21 +3729,30 @@ namespace Mono.CSharp {
 			var label = value as LabeledStatement;
 			Block b = block;
 			if (label != null) {
-				do {
-					if (label.Block == b)
-						return label;
-					b = b.Parent;
-				} while (b != null);
+				if (IsLabelVisible (label, b))
+					return label;
+
 			} else {
 				List<LabeledStatement> list = (List<LabeledStatement>) value;
 				for (int i = 0; i < list.Count; ++i) {
 					label = list[i];
-					if (label.Block == b)
+					if (IsLabelVisible (label, b))
 						return label;
 				}
 			}
 
 			return null;
+		}
+
+		static bool IsLabelVisible (LabeledStatement label, Block b)
+		{
+			do {
+				if (label.Block == b)
+					return true;
+				b = b.Parent;
+			} while (b != null);
+
+			return false;
 		}
 
 		public ParameterInfo GetParameterInfo (Parameter p)
@@ -6311,9 +6323,16 @@ namespace Mono.CSharp {
 			public override bool Resolve (BlockContext bc)
 			{
 				ctch.Filter = ctch.Filter.Resolve (bc);
-				var c = ctch.Filter as Constant;
-				if (c != null && !c.IsDefaultValue) {
-					bc.Report.Warning (7095, 1, ctch.Filter.Location, "Exception filter expression is a constant");
+
+				if (ctch.Filter != null) {
+					if (ctch.Filter.ContainsEmitWithAwait ()) {
+						bc.Report.Error (7094, ctch.Filter.Location, "The `await' operator cannot be used in the filter expression of a catch clause");
+					}
+
+					var c = ctch.Filter as Constant;
+					if (c != null && !c.IsDefaultValue) {
+						bc.Report.Warning (7095, 1, ctch.Filter.Location, "Exception filter expression is a constant");
+					}
 				}
 
 				return true;
@@ -6385,6 +6404,14 @@ namespace Mono.CSharp {
 
 				if (li != null)
 					EmitCatchVariableStore (ec);
+
+				if (Block.HasAwait) {
+					Block.EmitScopeInitializers (ec);
+				} else {
+					Block.Emit (ec);
+				}
+
+				return;
 			} else {
 				if (IsGeneral)
 					ec.BeginCatchBlock (ec.BuiltinTypes.Object);
@@ -6398,7 +6425,8 @@ namespace Mono.CSharp {
 				}
 			}
 
-			Block.Emit (ec);
+			if (!Block.HasAwait)
+				Block.Emit (ec);
 		}
 
 		void EmitCatchVariableStore (EmitContext ec)
@@ -6414,24 +6442,29 @@ namespace Mono.CSharp {
 				hoisted_temp = new LocalTemporary (li.Type);
 				hoisted_temp.Store (ec);
 
-				// switch to assigning from the temporary variable and not from top of the stack
+				// switch to assignment from temporary variable and not from top of the stack
 				assign.UpdateSource (hoisted_temp);
 			}
 		}
 
-		public override bool Resolve (BlockContext ec)
+		public override bool Resolve (BlockContext bc)
 		{
-			using (ec.Set (ResolveContext.Options.CatchScope)) {
-				if (type_expr != null) {
-					type = type_expr.ResolveAsType (ec);
+			using (bc.Set (ResolveContext.Options.CatchScope)) {
+				if (type_expr == null) {
+					CreateExceptionVariable (bc.Module.Compiler.BuiltinTypes.Object);
+				} else {
+					type = type_expr.ResolveAsType (bc);
 					if (type == null)
 						return false;
 
-					if (type.BuiltinType != BuiltinTypeSpec.Type.Exception && !TypeSpec.IsBaseClass (type, ec.BuiltinTypes.Exception, false)) {
-						ec.Report.Error (155, loc, "The type caught or thrown must be derived from System.Exception");
+					if (li == null)
+						CreateExceptionVariable (type);
+
+					if (type.BuiltinType != BuiltinTypeSpec.Type.Exception && !TypeSpec.IsBaseClass (type, bc.BuiltinTypes.Exception, false)) {
+						bc.Report.Error (155, loc, "The type caught or thrown must be derived from System.Exception");
 					} else if (li != null) {
 						li.Type = type;
-						li.PrepareAssignmentAnalysis (ec);
+						li.PrepareAssignmentAnalysis (bc);
 
 						// source variable is at the top of the stack
 						Expression source = new EmptyExpression (li.Type);
@@ -6451,13 +6484,25 @@ namespace Mono.CSharp {
 				}
 
 				Block.SetCatchBlock ();
-				return Block.Resolve (ec);
+				return Block.Resolve (bc);
 			}
+		}
+
+		void CreateExceptionVariable (TypeSpec type)
+		{
+			if (!Block.HasAwait)
+				return;
+
+			// TODO: Scan the block for rethrow expression
+			//if (!Block.HasRethrow)
+			//	return;
+
+			li = LocalVariable.CreateCompilerGenerated (type, block, Location.Null);
 		}
 
 		protected override bool DoFlowAnalysis (FlowAnalysisContext fc)
 		{
-			if (li != null) {
+			if (li != null && !li.IsCompilerGenerated) {
 				fc.SetVariableAssigned (li.VariableInfo, true);
 			}
 
@@ -6597,6 +6642,7 @@ namespace Mono.CSharp {
 		public Block Block;
 		List<Catch> clauses;
 		readonly bool inside_try_finally;
+		List<Catch> catch_sm;
 
 		public TryCatch (Block block, List<Catch> catch_clauses, Location l, bool inside_try_finally)
 			: base (l)
@@ -6640,6 +6686,13 @@ namespace Mono.CSharp {
 				var c = clauses[i];
 
 				ok &= c.Resolve (bc);
+
+				if (c.Block.HasAwait) {
+					if (catch_sm == null)
+						catch_sm = new List<Catch> ();
+
+					catch_sm.Add (c);
+				}
 
 				if (c.Filter != null)
 					continue;
@@ -6697,11 +6750,56 @@ namespace Mono.CSharp {
 
 			Block.Emit (ec);
 
-			foreach (Catch c in clauses)
+			LocalBuilder state_variable = null;
+			foreach (Catch c in clauses) {
 				c.Emit (ec);
+
+				if (catch_sm != null) {
+					if (state_variable == null)
+						state_variable = ec.GetTemporaryLocal (ec.Module.Compiler.BuiltinTypes.Int);
+
+					var index = catch_sm.IndexOf (c);
+					if (index < 0)
+						continue;
+
+					ec.EmitInt (index + 1);
+					ec.Emit (OpCodes.Stloc, state_variable);
+				}
+			}
 
 			if (!inside_try_finally)
 				ec.EndExceptionBlock ();
+
+			if (state_variable != null) {
+				ec.Emit (OpCodes.Ldloc, state_variable);
+
+				var labels = new Label [catch_sm.Count + 1];
+				for (int i = 0; i < labels.Length; ++i) {
+					labels [i] = ec.DefineLabel ();
+				}
+
+				var end = ec.DefineLabel ();
+				ec.Emit (OpCodes.Switch, labels);
+
+				// 0 value is default label
+				ec.MarkLabel (labels [0]);
+				ec.Emit (OpCodes.Br, end);
+
+				var atv = ec.AsyncThrowVariable;
+				Catch c = null;
+				for (int i = 0; i < catch_sm.Count; ++i) {
+					if (c != null && c.Block.HasReachableClosingBrace)
+						ec.Emit (OpCodes.Br, end);
+
+					ec.MarkLabel (labels [i + 1]);
+					c = catch_sm [i];
+					ec.AsyncThrowVariable = c.Variable;
+					c.Block.Emit (ec);
+				}
+				ec.AsyncThrowVariable = atv;
+
+				ec.MarkLabel (end);
+			}
 		}
 
 		protected override bool DoFlowAnalysis (FlowAnalysisContext fc)
@@ -7024,12 +7122,12 @@ namespace Mono.CSharp {
 				}
 			}
 
-			base.Resolve (ec);
+			var ok = base.Resolve (ec);
 
 			if (vr != null)
 				vr.IsLockedByStatement = vr_locked;
 
-			return true;
+			return ok;
 		}
 
 		protected override void CloneTo (CloneContext clonectx, Statement t)
@@ -7590,8 +7688,7 @@ namespace Mono.CSharp {
 				Statement = new CollectionForeach (this, variable, expr);
 			}
 
-			base.Resolve (ec);
-			return true;
+			return base.Resolve (ec);
 		}
 
 		protected override void DoEmit (EmitContext ec)

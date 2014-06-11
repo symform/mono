@@ -313,6 +313,8 @@ type_to_simd_type (int type)
 static LLVMTypeRef
 type_to_llvm_type (EmitContext *ctx, MonoType *t)
 {
+	t = mini_replace_type (t);
+
 	if (t->byref)
 		return LLVMPointerType (LLVMInt8Type (), 0);
 	switch (t->type) {
@@ -1069,11 +1071,13 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 	int i, j, pindex, vret_arg_pindex = 0;
 	int *pindexes;
 	gboolean vretaddr = FALSE;
+	MonoType *rtype;
 
 	if (sinfo)
 		memset (sinfo, 0, sizeof (LLVMSigInfo));
 
-	ret_type = type_to_llvm_type (ctx, sig->ret);
+	rtype = mini_replace_type (sig->ret);
+	ret_type = type_to_llvm_type (ctx, rtype);
 	CHECK_FAILURE (ctx);
 
 	if (cinfo && cinfo->ret.storage == LLVMArgVtypeInReg) {
@@ -1086,7 +1090,7 @@ sig_to_llvm_sig_full (EmitContext *ctx, MonoMethodSignature *sig, LLVMCallInfo *
 		} else {
 			g_assert_not_reached ();
 		}
-	} else if (cinfo && mini_type_is_vtype (ctx->cfg, sig->ret)) {
+	} else if (cinfo && mini_type_is_vtype (ctx->cfg, rtype)) {
 		g_assert (cinfo->ret.storage == LLVMArgVtypeRetAddr);
 		vretaddr = TRUE;
 		ret_type = LLVMVoidType ();
@@ -4397,7 +4401,10 @@ mono_llvm_emit_method (MonoCompile *cfg)
 
 	if (cfg->compile_aot) {
 		LLVMSetLinkage (method, LLVMInternalLinkage);
+#if LLVM_API_VERSION == 0
+		/* This causes an assertion in later LLVM versions */
 		LLVMSetVisibility (method, LLVMHiddenVisibility);
+#endif
 	} else {
 		LLVMSetLinkage (method, LLVMPrivateLinkage);
 	}

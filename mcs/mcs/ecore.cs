@@ -540,10 +540,16 @@ namespace Mono.CSharp {
 			return c;
 		}
 
-		public virtual void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType)
+		public virtual void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType, TypeSpec parameterType)
 		{
-			rc.Module.Compiler.Report.Error (182, loc,
-				"An attribute argument must be a constant expression, typeof expression or array creation expression");
+			if (Attribute.IsValidArgumentType (parameterType)) {
+				rc.Module.Compiler.Report.Error (182, loc,
+					"An attribute argument must be a constant expression, typeof expression or array creation expression");
+			} else {
+				rc.Module.Compiler.Report.Error (181, loc,
+					"Attribute constructor parameter has type `{0}', which is not a valid attribute parameter type",
+					targetType.GetSignatureForError ());
+			}
 		}
 
 		/// <summary>
@@ -1582,9 +1588,9 @@ namespace Mono.CSharp {
 			Child.Emit (ec);
 		}
 
-		public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType)
+		public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType, TypeSpec parameterType)
 		{
-			Child.EncodeAttributeValue (rc, enc, Child.Type);
+			Child.EncodeAttributeValue (rc, enc, Child.Type, parameterType);
 		}
 
 		public override void EmitBranchable (EmitContext ec, Label label, bool on_true)
@@ -1702,16 +1708,16 @@ namespace Mono.CSharp {
 			return this;
 		}
 
-		public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType)
+		public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType, TypeSpec parameterType)
 		{
 			// Only boxing to object type is supported
 			if (targetType.BuiltinType != BuiltinTypeSpec.Type.Object) {
-				base.EncodeAttributeValue (rc, enc, targetType);
+				base.EncodeAttributeValue (rc, enc, targetType, parameterType);
 				return;
 			}
 
 			enc.Encode (child.Type);
-			child.EncodeAttributeValue (rc, enc, child.Type);
+			child.EncodeAttributeValue (rc, enc, child.Type, parameterType);
 		}
 
 		public override void Emit (EmitContext ec)
@@ -2113,15 +2119,15 @@ namespace Mono.CSharp {
 				return c;
 			}
 
-			public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType)
+			public override void EncodeAttributeValue (IMemberContext rc, AttributeEncoder enc, TypeSpec targetType, TypeSpec parameterType)
 			{
 				//
 				// LAMESPEC: Reduced conditional expression is allowed as an attribute argument
 				//
 				if (orig_expr is Conditional)
-					child.EncodeAttributeValue (rc, enc, targetType);
+					child.EncodeAttributeValue (rc, enc, targetType,parameterType);
 				else
-					base.EncodeAttributeValue (rc, enc, targetType);
+					base.EncodeAttributeValue (rc, enc, targetType, parameterType);
 			}
 		}
 
@@ -4485,11 +4491,11 @@ namespace Mono.CSharp {
 					//
 					// LAMESPEC:
 					//
-					// void Foo (params int[]) is better than void Foo (int i = 0) for Foo ()
+					// void Foo (int i = 0) is better than void Foo (params int[]) for Foo ()
 					// void Foo (string[] s, string value = null) is better than Foo (string s, params string[]) for Foo (null) or Foo ()
 					//
 					if (cand_param.HasDefaultValue != best_param.HasDefaultValue)
-						return !candidate_params;
+						return cand_param.HasDefaultValue;
 
 					if (cand_param.HasDefaultValue) {
 						++j;
@@ -4692,7 +4698,10 @@ namespace Mono.CSharp {
 								++arg_count;
 								temp = null;
 							} else {
-								temp = arguments[index];
+								if (index == arg_count) 
+									return (i + 1) * 3;
+
+								temp = arguments [index];
 
 								// The slot has been taken by positional argument
 								if (temp != null && !(temp is NamedArgument))
@@ -5442,8 +5451,7 @@ namespace Mono.CSharp {
 			// For candidates which match on parameters count report more details about incorrect arguments
 			//
 			if (pm != null) {
-				int unexpanded_count = ((IParametersMember) best_candidate).Parameters.HasParams ? pm.Parameters.Count - 1 : pm.Parameters.Count;
-				if (pm.Parameters.Count == arg_count || params_expanded || unexpanded_count == arg_count) {
+				if (pm.Parameters.Count == arg_count || params_expanded || HasUnfilledParams (best_candidate, pm, args)) {
 					// Reject any inaccessible member
 					if (!best_candidate.IsAccessible (rc) || !best_candidate.DeclaringType.IsAccessible (rc)) {
 						rc.Report.SymbolRelatedToPreviousError (best_candidate);
@@ -5495,6 +5503,39 @@ namespace Mono.CSharp {
 				rc.Report.Error (1501, loc, "No overload for method `{0}' takes `{1}' arguments",
 					name, arg_count.ToString ());
 			}
+		}
+
+		static bool HasUnfilledParams (MemberSpec best_candidate, IParametersMember pm, Arguments args)
+		{
+			var p = ((IParametersMember)best_candidate).Parameters;
+			if (!p.HasParams)
+				return false;
+
+			string name = null;
+			for (int i = p.Count - 1; i != 0; --i) {
+				var fp = p.FixedParameters [i];
+				if ((fp.ModFlags & Parameter.Modifier.PARAMS) == 0)
+					continue;
+
+				name = fp.Name;
+				break;
+			}
+
+			foreach (var arg in args) {
+				var na = arg as NamedArgument;
+				if (na == null)
+					continue;
+
+				if (na.Name == name) {
+					name = null;
+					break;
+				}
+			}
+
+			if (name == null)
+				return false;
+
+			return args.Count + 1 == pm.Parameters.Count;
 		}
 
 		bool VerifyArguments (ResolveContext ec, ref Arguments args, MemberSpec member, IParametersMember pm, bool chose_params_expanded)
@@ -6259,7 +6300,6 @@ namespace Mono.CSharp {
 				var temp = ec.GetTemporaryLocal (type);
 				ec.Emit (OpCodes.Stloc, temp);
 				ec.Emit (OpCodes.Ldloca, temp);
-				ec.FreeTemporaryLocal (temp, type);
 				return;
 			}
 

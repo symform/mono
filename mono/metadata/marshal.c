@@ -35,6 +35,7 @@
 #include "mono/metadata/attrdefs.h"
 #include "mono/metadata/gc-internal.h"
 #include "mono/metadata/cominterop.h"
+#include "mono/metadata/reflection-internals.h"
 #include "mono/utils/mono-counters.h"
 #include "mono/utils/mono-tls.h"
 #include "mono/utils/mono-memory-model.h"
@@ -461,9 +462,15 @@ parse_unmanaged_function_pointer_attr (MonoClass *klass, MonoMethodPInvoke *piin
 		 */
 		cinfo = mono_custom_attrs_from_class (klass);
 		if (cinfo && !mono_runtime_get_no_exec ()) {
-			attr = (MonoReflectionUnmanagedFunctionPointerAttribute*)mono_custom_attrs_get_attr (cinfo, UnmanagedFunctionPointerAttribute);
+			MonoError error;
+			attr = (MonoReflectionUnmanagedFunctionPointerAttribute*)mono_custom_attrs_get_attr_checked (cinfo, UnmanagedFunctionPointerAttribute, &error);
 			if (attr) {
 				piinfo->piflags = (attr->call_conv << 8) | (attr->charset ? (attr->charset - 1) * 2 : 1) | attr->set_last_error;
+			} else {
+				if (!mono_error_ok (&error)) {
+					g_warning ("Could not load UnmanagedFunctionPointerAttribute due to %s", mono_error_get_message (&error));
+					mono_error_cleanup (&error);
+				}
 			}
 			if (!cinfo->cached)
 				mono_custom_attrs_free (cinfo);
@@ -5913,7 +5920,10 @@ emit_marshal_custom (EmitMarshalContext *m, int argnum, MonoType *t,
 		g_assert (marshal_native_to_managed);
 	}
 
-	mtype = mono_reflection_type_from_name (spec->data.custom_data.custom_name, m->image);
+	if (spec->data.custom_data.image)
+		mtype = mono_reflection_type_from_name (spec->data.custom_data.custom_name, spec->data.custom_data.image);
+	else
+		mtype = mono_reflection_type_from_name (spec->data.custom_data.custom_name, m->image);
 	g_assert (mtype != NULL);
 	mklass = mono_class_from_mono_type (mtype);
 	g_assert (mklass != NULL);

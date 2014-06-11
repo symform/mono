@@ -6848,6 +6848,12 @@ doc_cref
 		module.DocumentationBuilder.ParsedParameters = (List<DocumentationParameter>)$2;
 		$$ = null;
 	  }
+	| VOID opt_doc_method_sig
+	  {
+		module.DocumentationBuilder.ParsedBuiltinType = new TypeExpression (compiler.BuiltinTypes.Void, GetLocation ($1));
+		module.DocumentationBuilder.ParsedParameters = (List<DocumentationParameter>)$2;
+		$$ = null;
+	  }
 	| builtin_types DOT IDENTIFIER opt_doc_method_sig
 	  {
 		module.DocumentationBuilder.ParsedBuiltinType = (TypeExpression)$1;
@@ -6886,7 +6892,7 @@ doc_cref
 	  }	  
 	| OPERATOR overloadable_operator opt_doc_method_sig
 	  {
-		var p = (List<DocumentationParameter>)$3 ?? new List<DocumentationParameter> (1);
+		var p = (List<DocumentationParameter>)$3;
 		module.DocumentationBuilder.ParsedParameters = p;
 		module.DocumentationBuilder.ParsedOperator = (Operator.OpType) $2;
 		$$ = null;

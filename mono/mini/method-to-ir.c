@@ -4526,11 +4526,6 @@ handle_delegate_ctor (MonoCompile *cfg, MonoClass *klass, MonoInst *target, Mono
 	/* Set method field */
 	method_ins = emit_get_rgctx_method (cfg, context_used, method, MONO_RGCTX_INFO_METHOD);
 	MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, obj->dreg, G_STRUCT_OFFSET (MonoDelegate, method), method_ins->dreg);
-	if (cfg->gen_write_barriers) {
-		dreg = alloc_preg (cfg);
-		EMIT_NEW_BIALU_IMM (cfg, ptr, OP_PADD_IMM, dreg, obj->dreg, G_STRUCT_OFFSET (MonoDelegate, method));
-		emit_write_barrier (cfg, ptr, method_ins);
-	}
 	/* 
 	 * To avoid looking up the compiled code belonging to the target method
 	 * in mono_delegate_trampoline (), we allocate a per-domain memory slot to
@@ -7787,6 +7782,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 					EMIT_NEW_ARGLOAD (cfg, call->args [i], i);
 
 				mono_arch_emit_call (cfg, call);
+				cfg->param_area = MAX(cfg->param_area, call->stack_usage);
 				MONO_ADD_INS (bblock, (MonoInst*)call);
 			} else {
 				for (i = 0; i < num_args; ++i)

@@ -5,7 +5,13 @@
 
 #include <stdlib.h>
 #include <glib.h>
+#include "config.h"
 #include "mono-counters.h"
+#include "mono-proclib.h"
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 
 struct _MonoCounter {
 	MonoCounter *next;
@@ -244,10 +250,10 @@ dump_counter (MonoCounter *counter, FILE *outfile) {
 		if ((counter->type & MONO_COUNTER_UNIT_MASK) == MONO_COUNTER_TIME)
 			fprintf (outfile, ENTRY_FMT "%.2f ms\n", counter->name, (double)(*(gint64*)buffer) / 10000.0);
 		else
-			fprintf (outfile, ENTRY_FMT "%lld\n", counter->name, *(gint64*)buffer);
+			fprintf (outfile, ENTRY_FMT "%lld\n", counter->name, *(long long *)buffer);
 		break;
 	case MONO_COUNTER_ULONG:
-		fprintf (outfile, ENTRY_FMT "%llu\n", counter->name, *(guint64*)buffer);
+		fprintf (outfile, ENTRY_FMT "%llu\n", counter->name, *(unsigned long long *)buffer);
 		break;
 	case MONO_COUNTER_WORD:
 		fprintf (outfile, ENTRY_FMT "%zd\n", counter->name, *(gssize*)buffer);
@@ -266,6 +272,123 @@ dump_counter (MonoCounter *counter, FILE *outfile) {
 	g_free (buffer);
 }
 
+static gint64
+user_time (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_USER_TIME);
+}
+
+static gint64
+system_time (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_SYSTEM_TIME);
+}
+
+static gint64
+total_time (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_TOTAL_TIME);
+}
+
+static gint64
+working_set (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_WORKING_SET);
+}
+
+static gint64
+private_bytes (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_PRIVATE_BYTES);
+}
+
+static gint64
+virtual_bytes (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_VIRTUAL_BYTES);
+}
+
+static gint64
+page_faults (void)
+{
+	return mono_process_get_data (GINT_TO_POINTER (mono_process_current_pid ()), MONO_PROCESS_FAULTS);
+}
+
+static double
+cpu_load (int kind)
+{
+#if defined(TARGET_WIN32)
+#elif defined(TARGET_MACH)
+	double load [3];
+	if (getloadavg (load, 3) > 0)
+		return load [kind];
+#else
+	char buffer[512], *b;
+	int len, i;
+	FILE *f = fopen ("/proc/loadavg", "r");
+	if (f) {
+		len = fread (buffer, 1, sizeof (buffer) - 1, f);
+		if (len > 0) {
+			buffer [len < 511 ? len : 511] = 0;
+			b = buffer;
+			for (i = 0; i < 3; i++) {
+				if (kind == i)
+					return strtod (b, NULL);
+				if (i < 2) {
+					b = strchr (b, ' ');
+					if (!b)
+						return 0;
+					b += 1;
+				}
+			}
+		}
+		fclose (f);
+	}
+#endif
+	return 0;
+}
+
+static double
+cpu_load_1min (void)
+{
+	return cpu_load (0);
+}
+
+static double
+cpu_load_5min (void)
+{
+	return cpu_load (1);
+}
+
+static double
+cpu_load_15min (void)
+{
+	return cpu_load (2);
+}
+
+static gboolean system_counters_initialized = FALSE;
+
+#define SYSCOUNTER_TIME (MONO_COUNTER_SYSTEM | MONO_COUNTER_LONG | MONO_COUNTER_TIME | MONO_COUNTER_MONOTONIC | MONO_COUNTER_CALLBACK)
+#define SYSCOUNTER_BYTES (MONO_COUNTER_SYSTEM | MONO_COUNTER_LONG | MONO_COUNTER_BYTES | MONO_COUNTER_VARIABLE | MONO_COUNTER_CALLBACK)
+#define SYSCOUNTER_COUNT (MONO_COUNTER_SYSTEM | MONO_COUNTER_LONG | MONO_COUNTER_COUNT | MONO_COUNTER_MONOTONIC | MONO_COUNTER_CALLBACK)
+#define SYSCOUNTER_LOAD (MONO_COUNTER_SYSTEM | MONO_COUNTER_DOUBLE | MONO_COUNTER_PERCENTAGE | MONO_COUNTER_VARIABLE | MONO_COUNTER_CALLBACK)
+
+static void
+initialize_system_counters (void)
+{
+	mono_counters_register ("User Time", SYSCOUNTER_TIME, &user_time);
+	mono_counters_register ("System Time", SYSCOUNTER_TIME, &system_time);
+	mono_counters_register ("Total Time", SYSCOUNTER_TIME, &total_time);
+	mono_counters_register ("Working Set", SYSCOUNTER_BYTES, &working_set);
+	mono_counters_register ("Private Bytes", SYSCOUNTER_BYTES, &private_bytes);
+	mono_counters_register ("Virtual Bytes", SYSCOUNTER_BYTES, &virtual_bytes);
+	mono_counters_register ("Page Faults", SYSCOUNTER_COUNT, &page_faults);
+	mono_counters_register ("CPU Load Average - 1min", SYSCOUNTER_LOAD, &cpu_load_1min);
+	mono_counters_register ("CPU Load Average - 5min", SYSCOUNTER_LOAD, &cpu_load_5min);
+	mono_counters_register ("CPU Load Average - 15min", SYSCOUNTER_LOAD, &cpu_load_15min);
+
+	system_counters_initialized = TRUE;
+}
 
 /**
  * mono_counters_foreach:
@@ -281,6 +404,9 @@ mono_counters_foreach (CountersEnumCallback cb, gpointer user_data)
 {
 	MonoCounter *counter;
 
+	if (!system_counters_initialized)
+		initialize_system_counters ();
+
 	for (counter = counters; counter; counter = counter->next) {
 		if (!cb (counter, user_data))
 			return;
@@ -291,8 +417,7 @@ mono_counters_foreach (CountersEnumCallback cb, gpointer user_data)
 		size = sizeof (type);	\
 		if (buffer_size < size)	\
 			return -1;	\
-		type __var = cb ? ((functype)counter->addr) () : *(type*)counter->addr;	\
-		memcpy (buffer, &__var, size);	\
+		*(type*)buffer = cb ? ((functype)counter->addr) () : *(type*)counter->addr; \
 	} while (0);
 
 int

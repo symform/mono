@@ -262,11 +262,13 @@ dyn_array_int_size (DynIntArray *da)
 	return da->array.size;
 }
 
+#ifdef NEW_XREFS
 static void
 dyn_array_int_empty (DynIntArray *da)
 {
 	dyn_array_empty (&da->array);
 }
+#endif
 
 static void
 dyn_array_int_add (DynIntArray *da, int x)
@@ -281,17 +283,13 @@ dyn_array_int_get (DynIntArray *da, int x)
 	return ((int*)da->array.data)[x];
 }
 
+#ifdef NEW_XREFS
 static void
 dyn_array_int_set (DynIntArray *da, int idx, int val)
 {
 	((int*)da->array.data)[idx] = val;
 }
-
-static void
-dyn_array_int_ensure_capacity (DynIntArray *da, int capacity)
-{
-	dyn_array_ensure_capacity (&da->array, capacity, sizeof (int));
-}
+#endif
 
 static void
 dyn_array_int_ensure_independent (DynIntArray *da)
@@ -428,6 +426,7 @@ dyn_array_scc_get_ptr (DynSCCArray *da, int x)
 
 static DynIntArray merge_array;
 
+#ifdef NEW_XREFS
 static gboolean
 dyn_array_int_contains (DynIntArray *da, int x)
 {
@@ -437,12 +436,14 @@ dyn_array_int_contains (DynIntArray *da, int x)
 			return TRUE;
 	return FALSE;
 }
+#endif
 
 static void
 enable_accounting (void)
 {
+	SgenHashTable table = SGEN_HASH_TABLE_INIT (INTERNAL_MEM_BRIDGE_HASH_TABLE, INTERNAL_MEM_BRIDGE_HASH_TABLE_ENTRY, sizeof (HashEntryWithAccounting), mono_aligned_addr_hash, NULL);
 	bridge_accounting_enabled = TRUE;
-	hash_table = (SgenHashTable)SGEN_HASH_TABLE_INIT (INTERNAL_MEM_BRIDGE_HASH_TABLE, INTERNAL_MEM_BRIDGE_HASH_TABLE_ENTRY, sizeof (HashEntryWithAccounting), mono_aligned_addr_hash, NULL);
+	hash_table = table;
 }
 
 static MonoGCBridgeObjectKind
@@ -880,8 +881,8 @@ dump_graph (void)
 
 	MonoObject *obj;
 	HashEntry *entry;
-	int prefix_len = strlen (dump_prefix);
-	char filename [prefix_len + 64];
+	size_t prefix_len = strlen (dump_prefix);
+	char *filename = alloca(prefix_len + 64);
 	FILE *file;
 	int edge_id = 0;
 

@@ -215,6 +215,30 @@ namespace MonoTests.System.Collections.Concurrent
 		{
 			queue.CopyTo (new int[3], 0);
 		}
+
+		static WeakReference CreateWeakReference (object obj)
+		{
+			return new WeakReference (obj);
+		}
+
+		[Test]
+		// This depends on precise stack scanning
+		[Category ("NotWorking")]
+		public void TryDequeueReferenceTest ()
+		{
+			var obj = new Object ();
+			var weakReference = CreateWeakReference(obj);
+			var queue = new ConcurrentQueue<object> ();
+
+			queue.Enqueue (obj);
+			queue.TryDequeue (out obj);
+			obj = null;
+
+			GC.Collect ();
+			GC.WaitForPendingFinalizers ();
+
+			Assert.IsFalse (weakReference.IsAlive);
+		}
 	}
 }
 #endif

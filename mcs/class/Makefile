@@ -33,11 +33,8 @@ common_dirs := \
 	Mono.Posix			\
 	System.Core			\
 	Mono.Security			\
-	System				\
 	System.Security			\
 	System.Configuration		\
-	System				\
-	System.XML			\
 	I18N				\
 	$(resgen_dir)			\
 	System.Drawing			\
@@ -53,14 +50,12 @@ common_dirs := \
 	System.Web.ApplicationServices	\
 	System.Web			\
 	System.Web.Services		\
-	System.Web			\
 	System.Runtime.Remoting		\
 	System.Configuration.Install 	\
 	System.Management		\
 	System.Data.OracleClient	\
 	Microsoft.VisualC		\
 	Cscompmgd			\
-	System.Design			\
 	PEAPI				\
 	Npgsql				\
 	Commons.Xml.Relaxng		\
@@ -80,7 +75,6 @@ common_dirs := \
 	Mono.Cairo                      \
 	IBM.Data.DB2			\
 	CustomMarshalers		\
-	OpenSystem.C			\
 	Mono.Cecil			\
 	Mono.Cecil.Mdb			\
 	Mono.Debugger.Soft		\
@@ -109,15 +103,15 @@ net_2_0_dirs := \
 	Mono.Tasklets       		\
 	System.Dynamic			\
 	Mono.CSharp			\
-	System.Net				\
+	System.Net			\
 	System.Json
 
 net_2_0_only_dirs := \
 	System.Web.Extensions_1.0	\
-	System.Web.Extensions.Design_1.0	\
+	System.Web.Extensions.Design_1.0\
 	Compat.ICSharpCode.SharpZipLib	\
 	WindowsBase			\
-	System.ServiceModel.Web \
+	System.ServiceModel.Web 	\
 	System.Data.Services.Client	\
 	System.Data.Services		\
 	System.Web.Mvc \
@@ -176,8 +170,7 @@ monotouch_runtime_dirs := \
 monotouch_dirs := \
 	Mono.CSharp	\
 	Microsoft.CSharp \
-	Mono.Dynamic.Interpreter \
-	System.Core
+	Mono.Dynamic.Interpreter
 
 net_4_0_dirs := \
 	System.Numerics		\

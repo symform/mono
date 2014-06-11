@@ -1060,6 +1060,11 @@ typedef struct {
 	 */
 	MonoContext orig_ex_ctx;
 	gboolean orig_ex_ctx_set;
+
+	/* 
+	 * Stores if we need to run a chained exception in Windows.
+	 */
+	gboolean mono_win_chained_exception_needs_run;
 } MonoJitTlsData;
 
 /*
@@ -2445,7 +2450,7 @@ void
 mono_arch_setup_async_callback (MonoContext *ctx, void (*async_cb)(void *fun), gpointer user_data) MONO_INTERNAL;
 
 gboolean
-mono_thread_state_init_from_handle (MonoThreadUnwindState *tctx, MonoNativeThreadId thread_id, MonoNativeThreadHandle thread_handle) MONO_INTERNAL;
+mono_thread_state_init_from_handle (MonoThreadUnwindState *tctx, MonoThreadInfo *info) MONO_INTERNAL;
 
 
 /* Exception handling */
@@ -2656,7 +2661,7 @@ void mono_generic_sharing_cleanup (void) MONO_INTERNAL;
 MonoClass* mini_class_get_container_class (MonoClass *class) MONO_INTERNAL;
 MonoGenericContext* mini_class_get_context (MonoClass *class) MONO_INTERNAL;
 
-MonoType* mini_replace_type (MonoType *type) MONO_INTERNAL;
+MonoType* mini_replace_type (MonoType *type) MONO_LLVM_INTERNAL;
 MonoType* mini_get_basic_type_from_generic (MonoGenericSharingContext *gsctx, MonoType *type) MONO_INTERNAL;
 MonoType* mini_type_get_underlying_type (MonoGenericSharingContext *gsctx, MonoType *type) MONO_INTERNAL;
 MonoMethod* mini_get_shared_method (MonoMethod *method) MONO_INTERNAL;

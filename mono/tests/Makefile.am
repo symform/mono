@@ -1,6 +1,6 @@
 SUBDIRS = cas assemblyresolve gc-descriptors
 
-check-local: assemblyresolve/test/asm.dll testjit test-generic-sharing test-type-load test_platform test-process-exit test-messages rm-empty-logs
+check-local: assemblyresolve/test/asm.dll testjit test-generic-sharing test-type-load test-cattr-type-load test-reflection-load-with-context test_platform test-process-exit test-messages rm-empty-logs
 check-full: test-sgen check-local
 check-parallel: compile-tests check-full
 
@@ -551,7 +551,8 @@ DISABLED_TESTS=			\
 	bug-348522.2.exe	\
 	bug-459094.exe \
 	delegate-invoke.exe \
-	$(PLATFORM_DISABLED_TESTS)
+	$(PLATFORM_DISABLED_TESTS) \
+	$(EXTRA_DISABLED_TESTS)
 
 DISABLED_TESTS_WRENCH=	\
 	$(DISABLED_TESTS)	\
@@ -883,6 +884,25 @@ test-type-load: TestDriver.dll
 	@$(MCS) -t:library -out:t.dll $(srcdir)/t-missing.cs
 	@echo "Testing load-exception.exe..."
 	@$(RUNTIME) load-exceptions.exe > load-exceptions.exe.stdout 2> load-exceptions.exe.stderr
+
+EXTRA_DIST += custom-attr-errors.cs custom-attr-errors-lib.cs
+test-cattr-type-load: TestDriver.dll custom-attr-errors.cs custom-attr-errors-lib.cs
+	$(MCS) -D:WITH_MEMBERS /t:library $(srcdir)/custom-attr-errors-lib.cs
+	$(MCS) -r:TestDriver.dll -r:custom-attr-errors-lib.dll  $(srcdir)/custom-attr-errors.cs
+	$(MCS) /t:library $(srcdir)/custom-attr-errors-lib.cs
+	@echo "Testing custom-attribute-load-exceptions.exe..."
+	@$(RUNTIME) custom-attr-errors.exe > custom-attr-errors.exe.stdout 2> custom-attr-errors.exe.stderr
+
+EXTRA_DIST += reflection-load-with-context-lib.cs reflection-load-with-context-second-lib.cs reflection-load-with-context.cs
+test-reflection-load-with-context: TestDriver.dll reflection-load-with-context-lib.cs reflection-load-with-context-second-lib.cs reflection-load-with-context.cs
+	rm -rf reflection-load-dir
+	mkdir reflection-load-dir
+	$(MCS) /t:library $(srcdir)/reflection-load-with-context-second-lib.cs -out:reflection-load-dir/reflection-load-with-context-second-lib.dll
+	$(MCS) /t:library -r:reflection-load-dir/reflection-load-with-context-second-lib.dll $(srcdir)/reflection-load-with-context-lib.cs -out:reflection-load-dir/reflection-load-with-context-lib.dll
+	$(MCS) reflection-load-with-context.cs
+	@echo "Testing reflection-load-with-context.cs.exe..."
+	@$(RUNTIME) reflection-load-with-context.exe > reflection-load-with-context.exe.stdout 2> reflection-load-with-context.exe.stderr
+
 
 EXTRA_DIST += debug-casts.cs
 # This depends on TLS, so its not ran by default
