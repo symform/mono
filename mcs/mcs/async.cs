@@ -439,6 +439,10 @@ namespace Mono.CSharp
 			get; set;
 		}
 
+		public StackFieldExpr HoistedReturnState {
+			get; set;
+		}
+
 		public override bool IsIterator {
 			get {
 				return false;
@@ -501,7 +505,6 @@ namespace Mono.CSharp
 		MethodSpec builder_factory;
 		MethodSpec builder_start;
 		PropertySpec task;
-		LocalVariable hoisted_return;
 		int locals_captured;
 		Dictionary<TypeSpec, List<Field>> stack_fields;
 		Dictionary<TypeSpec, List<Field>> awaiter_fields;
@@ -515,11 +518,7 @@ namespace Mono.CSharp
 
 		#region Properties
 
-		public LocalVariable HoistedReturn {
-			get {
-				return hoisted_return;
-			}
-		}
+		public Expression HoistedReturnValue { get; set; }
 
 		public TypeSpec ReturnType {
 			get {
@@ -709,7 +708,7 @@ namespace Mono.CSharp
 			set_state_machine.Block.AddStatement (new StatementExpression (new Invocation (mg, args)));
 
 			if (has_task_return_type) {
-				hoisted_return = LocalVariable.CreateCompilerGenerated (bt.TypeArguments[0], StateMachineMethod.Block, Location);
+				HoistedReturnValue = TemporaryVariableReference.Create (bt.TypeArguments [0], StateMachineMethod.Block, Location);
 			}
 
 			return true;
@@ -896,11 +895,11 @@ namespace Mono.CSharp
 			};
 
 			Arguments args;
-			if (hoisted_return == null) {
+			if (HoistedReturnValue == null) {
 				args = new Arguments (0);
 			} else {
 				args = new Arguments (1);
-				args.Add (new Argument (new LocalVariableReference (hoisted_return, Location)));
+				args.Add (new Argument (HoistedReturnValue));
 			}
 
 			using (ec.With (BuilderContext.Options.OmitDebugInfo, true)) {

@@ -1284,23 +1284,42 @@ namespace Mono.CSharp {
 		protected override void DoEmit (EmitContext ec)
 		{
 			if (expr != null) {
-				expr.Emit (ec);
 
 				var async_body = ec.CurrentAnonymousMethod as AsyncInitializer;
 				if (async_body != null) {
-					var async_return = ((AsyncTaskStorey) async_body.Storey).HoistedReturn;
+					var storey = (AsyncTaskStorey)async_body.Storey;
+					Label exit_label = async_body.BodyEnd;
 
+					//
 					// It's null for await without async
-					if (async_return != null) {
-						async_return.EmitAssign (ec);
+					//
+					if (storey.HoistedReturnValue != null) {
+						//
+						// Special case hoisted return value (happens in try/finally scenario)
+						//
+						if (ec.TryFinallyUnwind != null) {
+							if (storey.HoistedReturnValue is VariableReference) {
+								storey.HoistedReturnValue = ec.GetTemporaryField (storey.HoistedReturnValue.Type);
+							}
 
+							exit_label = TryFinally.EmitRedirectedReturn (ec, async_body);
+						}
+
+						var async_return = (IAssignMethod)storey.HoistedReturnValue;
+						async_return.EmitAssign (ec, expr, false, false);
 						ec.EmitEpilogue ();
+					} else {
+						expr.Emit (ec);
+
+						if (ec.TryFinallyUnwind != null)
+							exit_label = TryFinally.EmitRedirectedReturn (ec, async_body);
 					}
 
-					ec.Emit (OpCodes.Leave, async_body.BodyEnd);
+					ec.Emit (OpCodes.Leave, exit_label);
 					return;
 				}
 
+				expr.Emit (ec);
 				ec.EmitEpilogue ();
 
 				if (unwind_protect || ec.EmitAccurateDebugInfo)
@@ -1421,8 +1440,6 @@ namespace Mono.CSharp {
 				} else {
 					label.AddGotoReference (rc, true);
 				}
-
-				try_finally = null;
 			} else {
 				label.AddGotoReference (rc, false);
 			}
@@ -1441,7 +1458,26 @@ namespace Mono.CSharp {
 				throw new InternalErrorException ("goto emitted before target resolved");
 
 			Label l = label.LabelTarget (ec);
+
+			if (ec.TryFinallyUnwind != null && IsLeavingFinally (label.Block)) {
+				var async_body = (AsyncInitializer) ec.CurrentAnonymousMethod;
+				l = TryFinally.EmitRedirectedJump (ec, async_body, l, label.Block);
+			}
+
 			ec.Emit (unwind_protect ? OpCodes.Leave : OpCodes.Br, l);
+		}
+
+		bool IsLeavingFinally (Block labelBlock)
+		{
+			var b = try_finally.Statement as Block;
+			while (b != null) {
+				if (b == labelBlock)
+					return true;
+
+				b = b.Parent;
+			}
+
+			return false;
 		}
 		
 		public override object Accept (StructuralVisitor visitor)
@@ -2186,13 +2222,13 @@ namespace Mono.CSharp {
 		{
 			li.CreateBuilder (ec);
 
-			if (Initializer != null)
+			if (Initializer != null && !IsUnreachable)
 				((ExpressionStatement) Initializer).EmitStatement (ec);
 
 			if (declarators != null) {
 				foreach (var d in declarators) {
 					d.Variable.CreateBuilder (ec);
-					if (d.Initializer != null) {
+					if (d.Initializer != null && !IsUnreachable) {
 						ec.Mark (d.Variable.Location);
 						((ExpressionStatement) d.Initializer).EmitStatement (ec);
 					}
@@ -2522,6 +2558,10 @@ namespace Mono.CSharp {
 
 		public void EmitAddressOf (EmitContext ec)
 		{
+			// TODO: Need something better for temporary variables
+			if ((flags & Flags.CompilerGenerated) != 0)
+				CreateBuilder (ec);
+
 			ec.Emit (OpCodes.Ldloca, builder);
 		}
 
@@ -2925,7 +2965,7 @@ namespace Mono.CSharp {
 
 				end_unreachable = s.FlowAnalysis (fc);
 				if (s.IsUnreachable) {
-					statements[startIndex] = new EmptyStatement (s.loc);
+					statements [startIndex] = RewriteUnreachableStatement (s);
 					continue;
 				}
 
@@ -2952,7 +2992,7 @@ namespace Mono.CSharp {
 
 						if (s.IsUnreachable) {
 							s.FlowAnalysis (fc);
-							statements[startIndex] = new EmptyStatement (s.loc);
+							statements [startIndex] = RewriteUnreachableStatement (s);
 						}
 					}
 				}
@@ -2965,6 +3005,24 @@ namespace Mono.CSharp {
 			//	Debug.Fail ();
 
 			return !Explicit.HasReachableClosingBrace;
+		}
+
+		static Statement RewriteUnreachableStatement (Statement s)
+		{
+			// LAMESPEC: It's not clear whether declararion statement should be part of reachability
+			// analysis. Even csc report unreachable warning for it but it's actually used hence
+			// we try to emulate this behaviour
+			//
+			// Consider:
+			// 	goto L;
+			//	int v;
+			// L:
+			//	v = 1;
+
+			if (s is BlockVariable)
+				return s;
+
+			return new EmptyStatement (s.loc);
 		}
 
 		public void ScanGotoJump (Statement label)
@@ -5470,10 +5528,10 @@ namespace Mono.CSharp {
 			EmitTryBodyPrepare (ec);
 			EmitTryBody (ec);
 
-			bool begin = EmitBeginFinallyBlock (ec);
+			bool beginFinally = EmitBeginFinallyBlock (ec);
 
 			Label start_finally = ec.DefineLabel ();
-			if (resume_points != null) {
+			if (resume_points != null && beginFinally) {
 				var state_machine = (StateMachineInitializer) ec.CurrentAnonymousMethod;
 
 				ec.Emit (OpCodes.Ldloc, state_machine.SkipFinally);
@@ -5498,7 +5556,7 @@ namespace Mono.CSharp {
 				EmitFinallyBody (ec);
 			}
 
-			if (begin)
+			if (beginFinally)
 				ec.EndExceptionBlock ();
 		}
 
@@ -6550,6 +6608,8 @@ namespace Mono.CSharp {
 	{
 		ExplicitBlock fini;
 		List<DefiniteAssignmentBitSet> try_exit_dat;
+		List<Label> redirected_jumps;
+		Label? start_fin_label;
 
 		public TryFinally (Statement stmt, ExplicitBlock fini, Location loc)
 			 : base (stmt, loc)
@@ -6585,6 +6645,20 @@ namespace Mono.CSharp {
 
 		protected override void EmitTryBody (EmitContext ec)
 		{
+			if (fini.HasAwait) {
+				if (ec.TryFinallyUnwind == null)
+					ec.TryFinallyUnwind = new List<TryFinally> ();
+
+				ec.TryFinallyUnwind.Add (this);
+				stmt.Emit (ec);
+				ec.TryFinallyUnwind.Remove (this);
+
+				if (start_fin_label != null)
+					ec.MarkLabel (start_fin_label.Value);
+
+				return;
+			}
+
 			stmt.Emit (ec);
 		}
 
@@ -6598,52 +6672,130 @@ namespace Mono.CSharp {
 
 		public override void EmitFinallyBody (EmitContext ec)
 		{
-			StackFieldExpr exception_field;
-
-			if (fini.HasAwait) {
-				//
-				// Emits catch block like
-				//
-				// catch (object temp) {
-				//	this.exception_field = temp;
-				// }
-				//
-				var type = ec.BuiltinTypes.Object;
-				ec.BeginCatchBlock (type);
-
-				var temp = ec.GetTemporaryLocal (type);
-				ec.Emit (OpCodes.Stloc, temp);
-
-				exception_field = ec.GetTemporaryField (type);
-				ec.EmitThis ();
-				ec.Emit (OpCodes.Ldloc, temp);
-				exception_field.EmitAssignFromStack (ec);
-
-				ec.EndExceptionBlock ();
-
-				ec.FreeTemporaryLocal (temp, type);
-			} else {
-				exception_field = null;
+			if (!fini.HasAwait) {
+				fini.Emit (ec);
+				return;
 			}
+
+			//
+			// Emits catch block like
+			//
+			// catch (object temp) {
+			//	this.exception_field = temp;
+			// }
+			//
+			var type = ec.BuiltinTypes.Object;
+			ec.BeginCatchBlock (type);
+
+			var temp = ec.GetTemporaryLocal (type);
+			ec.Emit (OpCodes.Stloc, temp);
+
+			var exception_field = ec.GetTemporaryField (type);
+			ec.EmitThis ();
+			ec.Emit (OpCodes.Ldloc, temp);
+			exception_field.EmitAssignFromStack (ec);
+
+			ec.EndExceptionBlock ();
+
+			ec.FreeTemporaryLocal (temp, type);
 
 			fini.Emit (ec);
 
-			if (exception_field != null) {
-				//
-				// Emits exception rethrow
-				//
-				// if (this.exception_field != null)
-				//	throw this.exception_field;
-				//
-				exception_field.Emit (ec);
-				var skip_throw = ec.DefineLabel ();
-				ec.Emit (OpCodes.Brfalse_S, skip_throw);
-				exception_field.Emit (ec);
-				ec.Emit (OpCodes.Throw);
-				ec.MarkLabel (skip_throw);
+			//
+			// Emits exception rethrow
+			//
+			// if (this.exception_field != null)
+			//	throw this.exception_field;
+			//
+			exception_field.Emit (ec);
+			var skip_throw = ec.DefineLabel ();
+			ec.Emit (OpCodes.Brfalse_S, skip_throw);
+			exception_field.Emit (ec);
+			ec.Emit (OpCodes.Throw);
+			ec.MarkLabel (skip_throw);
 
-				exception_field.IsAvailableForReuse = true;
+			exception_field.IsAvailableForReuse = true;
+
+			EmitUnwindFinallyTable (ec);
+		}
+
+		bool IsParentBlock (Block block)
+		{
+			for (Block b = fini; b != null; b = b.Parent) {
+				if (b == block)
+					return true;
 			}
+
+			return false;
+		}
+
+		public static Label EmitRedirectedJump (EmitContext ec, AsyncInitializer initializer, Label label, Block labelBlock)
+		{
+			bool set_return_state = true;
+
+			foreach (var fin in ec.TryFinallyUnwind) {
+				if (labelBlock != null && !fin.IsParentBlock (labelBlock))
+					break;
+
+				fin.EmitRedirectedExit (ec, label, initializer, set_return_state);
+				set_return_state = false;
+
+				if (fin.start_fin_label == null) {
+					fin.start_fin_label = ec.DefineLabel ();
+				}
+
+				label = fin.start_fin_label.Value;
+			}
+
+			return label;
+		}
+
+		public static Label EmitRedirectedReturn (EmitContext ec, AsyncInitializer initializer)
+		{
+			return EmitRedirectedJump (ec, initializer, initializer.BodyEnd, null);
+		}
+
+		void EmitRedirectedExit (EmitContext ec, Label label, AsyncInitializer initializer, bool setReturnState)
+		{
+			if (redirected_jumps == null) {
+				redirected_jumps = new List<Label> ();
+
+				// Add fallthrough label
+				redirected_jumps.Add (ec.DefineLabel ());
+				if (setReturnState)
+					initializer.HoistedReturnState = ec.GetTemporaryField (ec.Module.Compiler.BuiltinTypes.Int);
+			}
+
+			int index = redirected_jumps.IndexOf (label);
+			if (index < 0) {
+				redirected_jumps.Add (label);
+				index = redirected_jumps.Count - 1;
+			}
+
+			//
+			// Indicates we have captured return value
+			//
+			if (setReturnState) {
+				var value = new IntConstant (initializer.HoistedReturnState.Type, index, Location.Null);
+				initializer.HoistedReturnState.EmitAssign (ec, value, false, false);
+			}
+		}
+
+		//
+		// Emits state table of jumps outside of try block and reload of return
+		// value when try block returns value
+		//
+		void EmitUnwindFinallyTable (EmitContext ec)
+		{
+			if (redirected_jumps == null)
+				return;
+
+			var initializer = (AsyncInitializer)ec.CurrentAnonymousMethod;
+			initializer.HoistedReturnState.EmitLoad (ec);
+			ec.Emit (OpCodes.Switch, redirected_jumps.ToArray ());
+
+			// Mark fallthrough label
+			ec.MarkLabel (redirected_jumps [0]);
 		}
 
 		protected override bool DoFlowAnalysis (FlowAnalysisContext fc)
@@ -6938,6 +7090,7 @@ namespace Mono.CSharp {
 			public VariableDeclaration (LocalVariable li, Location loc)
 				: base (li)
 			{
+				reachable = true;
 				this.loc = loc;
 			}
 
@@ -7380,6 +7533,7 @@ namespace Mono.CSharp {
 				public RuntimeDispose (LocalVariable lv, Location loc)
 					: base (lv, loc)
 				{
+					reachable = true;
 				}
 
 				protected override void CheckIDiposableConversion (BlockContext bc, LocalVariable li, Expression initializer)
