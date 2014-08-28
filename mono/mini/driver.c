@@ -58,7 +58,7 @@
 #include "proctitle.h"
 #include "debugger-agent.h"
 
-static FILE *mini_stats_fd = NULL;
+static FILE *mini_stats_fd;
 
 static void mini_usage (void);
 
@@ -1520,9 +1520,6 @@ mono_main (int argc, char* argv[])
 	if (g_getenv ("MONO_NO_SMP"))
 		mono_set_use_smp (FALSE);
 	
-	if (!g_thread_supported ())
-		g_thread_init (NULL);
-
 	g_log_set_always_fatal (G_LOG_LEVEL_ERROR);
 	g_log_set_fatal_mask (G_LOG_DOMAIN, G_LOG_LEVEL_ERROR);
 
@@ -2186,6 +2183,8 @@ mono_jit_init_version (const char *domain_name, const char *runtime_version)
 void        
 mono_jit_cleanup (MonoDomain *domain)
 {
+	mono_thread_manage ();
+
 	mini_cleanup (domain);
 }
 
