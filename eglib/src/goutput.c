@@ -74,7 +74,7 @@ g_printerr (const gchar *format, ...)
 	if (!stderr_handler)
 		stderr_handler = default_stderr_handler;
 
-	stdout_handler (msg);
+	stderr_handler (msg);
 	free (msg);
 }
 
@@ -176,7 +176,7 @@ default_stderr_handler (const gchar *message)
 }
 
 
-#elif MONOTOUCH
+#elif defined(HOST_IOS)
 #include <asl.h>
 
 static int
@@ -268,7 +268,7 @@ GPrintFunc
 g_set_printerr_handler (GPrintFunc func)
 {
 	GPrintFunc old = stderr_handler;
-	stdout_handler = func;
+	stderr_handler = func;
 	return old;
 }
 
